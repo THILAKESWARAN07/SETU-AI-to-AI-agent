@@ -328,3 +328,76 @@
     width: 100%;
   }
 }
+
+/* Gateway Simulator Card */
+.gateway-simulator-card {
+  background-color: var(--bg-card);
+  border: 1px dashed var(--border-color);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.sim-title {
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+  color: var(--accent-orange);
+}
+
+.sim-desc {
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.sim-actions {
+  display: flex;
+  gap: 16px;
+}
+
+.sim-actions button {
+  padding: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.sim-btn-success {
+  flex: 1.5;
+  background-color: rgba(34, 197, 94, 0.05);
+  border: 1px solid var(--accent-green);
+  color: var(--accent-green);
+}
+
+.sim-btn-success:hover:not(:disabled) {
+  background-color: var(--accent-green) !important;
+  color: var(--bg-main) !important;
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.3);
+}
+
+.sim-btn-failed {
+  flex: 1;
+  background-color: rgba(239, 68, 68, 0.05);
+  border: 1px solid var(--accent-red);
+  color: var(--accent-red);
+}
+
+.sim-btn-failed:hover:not(:disabled) {
+  background-color: var(--accent-red) !important;
+  color: var(--text-main) !important;
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.3);
+}
+
+@media (max-width: 576px) {
+  .sim-actions {
+    flex-direction: column;
+  }
+}
+

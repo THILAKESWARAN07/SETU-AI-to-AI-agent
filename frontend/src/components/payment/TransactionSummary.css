@@ -1,0 +1,155 @@
+.transaction-summary-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.card-header-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 14px;
+}
+
+.card-hdr-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--text-dimmed);
+}
+
+.card-hdr-title {
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+}
+
+.hdr-status-badge {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background-color: rgba(239, 68, 68, 0.1);
+  border: 1px solid var(--accent-red);
+  color: var(--accent-red);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.badge-lock-icon {
+  width: 10px;
+  height: 10px;
+}
+
+.summary-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.summary-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-label {
+  font-size: 0.7rem;
+  color: var(--text-dimmed);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.bundle-title {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.bundle-items {
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summary-divider {
+  height: 1px;
+  background-color: var(--border-color);
+}
+
+.summary-subdivider {
+  height: 1px;
+  background-color: var(--border-color);
+  margin: 6px 0;
+  border-top: 1px dashed var(--border-color);
+}
+
+.id-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.75rem;
+}
+
+.id-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.id-lbl {
+  color: var(--text-dimmed);
+}
+
+.id-val {
+  text-align: right;
+  word-break: break-all;
+}
+
+.pricing-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.price-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+}
+
+.price-row.final-price {
+  font-weight: 600;
+  font-size: 1rem;
+  padding-top: 4px;
+}
+
+.highlight-amount {
+  color: var(--secondary);
+  text-shadow: 0 0 8px var(--secondary-glow);
+}
+
+.card-footer-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 14px;
+  font-size: 0.7rem;
+}
+
+.footer-check-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
