@@ -1,0 +1,185 @@
+.processing-container {
+  width: 100%;
+  max-width: 600px;
+  margin: 40px auto 0;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 32px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.processing-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 24px;
+  margin-bottom: 24px;
+}
+
+.processing-spinner {
+  width: 28px;
+  height: 28px;
+  color: var(--secondary);
+  animation: spin 1.5s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.processing-header h3 {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.processing-header p {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* Steps list */
+.processing-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.process-step-row {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  position: relative;
+}
+
+/* Left status indicators */
+.process-status-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 24px;
+  height: 80px;
+}
+
+.status-indicator {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  background-color: var(--bg-card);
+  border: 1.5px solid var(--border-color);
+  transition: all var(--transition-normal);
+}
+
+.status-indicator.completed {
+  background-color: var(--accent-green);
+  border-color: var(--accent-green);
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.2);
+  color: var(--bg-main);
+}
+
+.status-indicator.active {
+  border-color: var(--primary);
+  box-shadow: 0 0 10px rgba(100, 75, 255, 0.2);
+}
+
+.status-indicator.pending {
+  border-color: var(--border-color);
+}
+
+.check-icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 3;
+}
+
+.spinner-icon-small {
+  width: 12px;
+  height: 12px;
+  color: var(--primary);
+  animation: spin 1s linear infinite;
+}
+
+.dot-icon {
+  width: 6px;
+  height: 6px;
+  background-color: var(--text-dimmed);
+  border-radius: 50%;
+}
+
+.step-connector-line {
+  width: 1.5px;
+  background-color: var(--border-color);
+  flex: 1;
+  margin-top: 4px;
+  z-index: 1;
+}
+
+.process-completed .step-connector-line {
+  background-color: var(--accent-green);
+}
+
+/* Right Details Columns */
+.process-details-col {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  padding-top: 1px;
+}
+
+.process-icon-wrapper {
+  color: var(--text-dimmed);
+  transition: color var(--transition-normal);
+}
+
+.step-process-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.process-text-content h4 {
+  font-size: 0.95rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  transition: color var(--transition-normal);
+}
+
+.process-text-content p {
+  font-size: 0.85rem;
+  color: var(--text-dimmed);
+  margin-top: 2px;
+  transition: color var(--transition-normal);
+}
+
+/* Color states */
+.process-active .process-icon-wrapper {
+  color: var(--primary);
+}
+
+.process-active .process-text-content h4 {
+  color: var(--text-main);
+}
+
+.process-active .process-text-content p {
+  color: var(--text-muted);
+}
+
+.process-completed .process-icon-wrapper {
+  color: var(--accent-green);
+}
+
+.process-completed .process-text-content h4 {
+  color: var(--text-muted);
+}
+
+.process-completed .process-text-content p {
+  color: var(--text-dimmed);
+}
+
+.process-pending {
+  opacity: 0.45;
+}

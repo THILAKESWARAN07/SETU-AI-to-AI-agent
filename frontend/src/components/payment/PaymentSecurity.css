@@ -1,0 +1,79 @@
+.payment-security-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.security-title {
+  font-size: 1.15rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 16px;
+}
+
+.security-checks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.security-check-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.security-icon-wrapper {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 2px;
+}
+
+.sec-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.sec-icon.success {
+  color: var(--accent-green);
+}
+
+.sec-icon.info {
+  color: var(--secondary);
+}
+
+.sec-icon.alert {
+  color: var(--accent-orange);
+}
+
+.security-text-content h4 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.security-text-content p {
+  font-size: 0.8rem;
+  color: var(--text-dimmed);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+.security-explanation-box {
+  background-color: HSL(222, 47%, 2%);
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}

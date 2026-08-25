@@ -1,0 +1,141 @@
+.intent-input-container {
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.intent-form {
+  width: 100%;
+}
+
+.intent-textarea-wrapper {
+  position: relative;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 16px 60px 16px 20px;
+  transition: all var(--transition-normal);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.intent-textarea-wrapper:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary), 0 8px 30px rgba(100, 75, 255, 0.1);
+}
+
+.intent-textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  resize: none;
+  outline: none;
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  font-size: 1.15rem;
+  line-height: 1.5;
+}
+
+.intent-textarea::placeholder {
+  color: var(--text-dimmed);
+}
+
+.intent-submit-btn {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  background-color: var(--text-main);
+  color: var(--bg-main);
+  border: none;
+  border-radius: 8px;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.intent-submit-btn:hover:not(:disabled) {
+  background-color: var(--primary-hover);
+  color: var(--text-main);
+  transform: scale(1.05);
+}
+
+.intent-submit-btn:disabled {
+  background-color: var(--border-color);
+  color: var(--text-dimmed);
+  cursor: not-allowed;
+}
+
+.submit-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.submit-kbd {
+  display: none; /* Hide on mobile/touch screen */
+}
+
+@media (min-width: 768px) {
+  .submit-kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 6px;
+    opacity: 0.5;
+  }
+}
+
+.kbd-icon {
+  width: 12px;
+  height: 12px;
+}
+
+/* Examples list */
+.intent-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  padding-left: 4px;
+}
+
+.examples-label {
+  font-size: 0.8rem;
+  color: var(--text-dimmed);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.examples-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.example-chip {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.example-chip:hover:not(:disabled) {
+  border-color: var(--border-color-hover);
+  color: var(--text-main);
+  background-color: var(--bg-card-hover);
+}
+
+.example-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

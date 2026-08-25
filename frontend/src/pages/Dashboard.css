@@ -1,0 +1,342 @@
+.dashboard-container {
+  display: flex;
+  flex-direction: column;
+  gap: 80px;
+  padding: 60px 0 100px;
+}
+
+/* Hero Section Styles */
+.hero-section {
+  text-align: center;
+  max-width: 800px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  padding: 8px 16px;
+  border-radius: 9999px;
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+  color: var(--secondary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.badge-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.hero-title {
+  font-size: 3.5rem;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hero-title-accent {
+  background: linear-gradient(135deg, var(--text-main) 30%, var(--text-muted) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: 2.2rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.hero-desc {
+  font-size: 1.2rem;
+  color: var(--text-muted);
+  max-width: 600px;
+  line-height: 1.5;
+}
+
+.hero-actions {
+  margin-top: 12px;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 28px;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  border: none;
+  font-family: var(--font-sans);
+  transition: all var(--transition-fast);
+}
+
+.btn-primary {
+  background-color: var(--text-main);
+  color: var(--bg-main);
+}
+
+.btn-primary:hover {
+  background-color: var(--text-main);
+  transform: translateY(-2px);
+}
+
+.btn-glow:hover {
+  box-shadow: 0 0 20px rgba(255, 255, 255, 0.15);
+}
+
+.btn-icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* Section Common Styles */
+.section-title {
+  font-size: 1.8rem;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.section-subtitle {
+  text-align: center;
+  color: var(--text-dimmed);
+  margin-bottom: 48px;
+  font-size: 0.95rem;
+}
+
+/* Architecture Flow Visualizer */
+.flow-visualizer {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.flow-card {
+  flex: 1;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: all var(--transition-normal);
+  cursor: default;
+}
+
+.flow-card:hover, .flow-card-active {
+  border-color: var(--primary);
+  transform: translateY(-4px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+}
+
+.flow-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.flow-card-icon-wrapper {
+  color: var(--secondary);
+  background-color: rgba(0, 230, 255, 0.05);
+  border: 1px solid rgba(0, 230, 255, 0.15);
+  padding: 10px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.step-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.flow-card-badge {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--text-dimmed);
+  border: 1px solid var(--border-color);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: var(--bg-input);
+}
+
+.flow-card-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.step-number {
+  font-family: var(--font-mono);
+  color: var(--text-dimmed);
+  font-size: 0.9rem;
+}
+
+.flow-card-desc {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.flow-card-glow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle 80px at var(--mouse-x, 50%) var(--mouse-y, 0%), rgba(100, 75, 255, 0.05), transparent 80%);
+  pointer-events: none;
+}
+
+/* Connectors */
+.flow-connector {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 40px;
+}
+
+.connector-line {
+  width: 100%;
+  height: 1px;
+  background-color: var(--border-color);
+  position: relative;
+}
+
+.connector-pulse {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 8px;
+  height: 3px;
+  background-color: var(--secondary);
+  border-radius: 50%;
+  animation: movePulse 2s linear infinite;
+  box-shadow: 0 0 8px var(--secondary);
+}
+
+.connector-arrow {
+  color: var(--text-dimmed);
+  width: 14px;
+  height: 14px;
+  position: absolute;
+}
+
+@keyframes movePulse {
+  0% { left: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { left: 100%; opacity: 0; }
+}
+
+/* System Status Grid */
+.system-status-section {
+  border-top: 1px solid var(--border-color);
+  padding-top: 40px;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+
+.status-item {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.status-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.status-icon.success {
+  color: var(--accent-green);
+}
+
+.status-info h4 {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.status-info p {
+  font-size: 0.8rem;
+  color: var(--text-dimmed);
+}
+
+/* Responsive Styles */
+@media (max-width: 1024px) {
+  .flow-visualizer {
+    flex-direction: column;
+    gap: 16px;
+  }
+  
+  .flow-connector {
+    width: 100%;
+    height: 30px;
+  }
+  
+  .connector-line {
+    width: 1px;
+    height: 100%;
+    margin: 0 auto;
+  }
+  
+  .connector-pulse {
+    width: 3px;
+    height: 8px;
+    top: 0;
+    left: -1px;
+    animation: movePulseVertical 2s linear infinite;
+  }
+  
+  .connector-arrow {
+    transform: rotate(90deg);
+  }
+  
+  .status-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  
+  .hero-title {
+    font-size: 2.5rem;
+  }
+  
+  .hero-title-accent {
+    font-size: 1.6rem;
+  }
+}
+
+@keyframes movePulseVertical {
+  0% { top: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}

@@ -1,0 +1,88 @@
+.negotiation-console-panel {
+  background-color: HSL(222, 47%, 2%);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.console-panel-header {
+  background-color: var(--bg-card);
+  border-bottom: 1px solid var(--border-color);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.console-panel-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--secondary);
+}
+
+.console-panel-status {
+  margin-left: auto;
+  color: var(--accent-green);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.console-panel-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.console-log-line {
+  display: flex;
+  gap: 12px;
+  color: var(--text-muted);
+  align-items: flex-start;
+}
+
+.log-line-num {
+  color: var(--text-dimmed);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.log-line-timestamp {
+  color: var(--text-dimmed);
+  flex-shrink: 0;
+}
+
+.log-line-source {
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.log-line-source.source-buyer {
+  color: var(--primary-hover);
+}
+
+.log-line-source.source-merchant {
+  color: var(--secondary);
+}
+
+.log-line-source.source-policy {
+  color: var(--accent-orange);
+}
+
+.log-line-source.source-system {
+  color: var(--accent-green);
+}
+
+.log-line-msg {
+  color: var(--text-main);
+  word-break: break-all;
+}

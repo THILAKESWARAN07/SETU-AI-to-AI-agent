@@ -1,0 +1,131 @@
+.state-tracker-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 24px 32px;
+}
+
+.state-steps-wrapper {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: relative;
+  width: 100%;
+}
+
+.state-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  flex: 1;
+}
+
+.step-circle {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background-color: var(--bg-card);
+  border: 1.5px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  color: var(--text-dimmed);
+  z-index: 2;
+  transition: all var(--transition-normal);
+}
+
+.step-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-dimmed);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: center;
+  z-index: 2;
+  transition: color var(--transition-normal);
+}
+
+.step-line {
+  position: absolute;
+  top: 14px;
+  left: calc(50% + 14px);
+  width: calc(100% - 28px);
+  height: 1.5px;
+  background-color: var(--border-color);
+  z-index: 1;
+  transition: background-color var(--transition-normal);
+}
+
+/* Step states */
+.state-completed .step-circle {
+  background-color: var(--accent-green);
+  border-color: var(--accent-green);
+  color: var(--bg-main);
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.15);
+}
+
+.state-completed .step-label {
+  color: var(--text-muted);
+}
+
+.state-completed .step-line {
+  background-color: var(--accent-green);
+}
+
+.state-active .step-circle {
+  border-color: var(--secondary);
+  color: var(--secondary);
+  box-shadow: 0 0 10px rgba(0, 230, 255, 0.2);
+  transform: scale(1.05);
+}
+
+.state-active .step-label {
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.state-pending .step-circle {
+  border-color: var(--border-color);
+  color: var(--text-dimmed);
+}
+
+.step-check-icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 3;
+}
+
+@media (max-width: 768px) {
+  .state-steps-wrapper {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 20px;
+    padding-left: 20px;
+  }
+  .state-steps-wrapper::before {
+    content: "";
+    position: absolute;
+    top: 14px;
+    left: 33px;
+    width: 1.5px;
+    height: calc(100% - 28px);
+    background-color: var(--border-color);
+  }
+  .state-step {
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    flex: none;
+  }
+  .step-line {
+    display: none;
+  }
+  .step-label {
+    text-align: left;
+  }
+}

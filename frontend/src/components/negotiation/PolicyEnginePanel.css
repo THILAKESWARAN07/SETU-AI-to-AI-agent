@@ -1,0 +1,146 @@
+.policy-engine-panel {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.policy-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.policy-header-icon {
+  width: 24px;
+  height: 24px;
+  color: var(--accent-green);
+}
+
+.policy-subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Metrics grid */
+.policy-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.policy-metric-box {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.metric-box-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dimmed);
+  letter-spacing: 0.05em;
+}
+
+.box-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.metric-box-value {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: var(--text-main);
+}
+
+.metric-box-value.highlight-blue {
+  color: var(--secondary);
+}
+
+.metric-box-value.highlight-green {
+  color: var(--accent-green);
+}
+
+.discount-amount-sub {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* Rules Footer */
+.policy-rules-footer {
+  border-top: 1px solid var(--border-color);
+  padding-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.footer-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.footer-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--primary);
+}
+
+.rules-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.rule-item-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.rule-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.rule-dot.green {
+  background-color: var(--accent-green);
+  box-shadow: 0 0 6px var(--accent-green);
+}
+
+@media (max-width: 1024px) {
+  .policy-metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 576px) {
+  .policy-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+  .rules-grid {
+    flex-direction: column;
+    gap: 10px;
+  }
+}
