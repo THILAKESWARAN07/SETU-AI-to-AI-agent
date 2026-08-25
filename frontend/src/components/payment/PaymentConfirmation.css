@@ -156,13 +156,19 @@
 .action-buttons-wrapper {
   margin-top: 24px;
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
 }
 
 .dashboard-action-btn {
   width: 100%;
-  padding: 14px 28px;
-  font-size: 0.95rem;
+  padding: 12px 24px;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 @media (max-width: 992px) {

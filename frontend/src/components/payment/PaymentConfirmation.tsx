@@ -1,4 +1,5 @@
-import { CheckCircle, ArrowLeft } from 'lucide-react';
+import { CheckCircle, ArrowLeft, Eye, History } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import type { DemoCommerceResponse, Transaction } from '../../types';
 import TransactionSummary from './TransactionSummary';
 import './PaymentConfirmation.css';
@@ -14,6 +15,7 @@ export default function PaymentConfirmation({
   result,
   onBackToDashboard
 }: PaymentConfirmationProps) {
+  const navigate = useNavigate();
   return (
     <div className="payment-confirmation-container animate-fade-in">
       <div className="success-banner">
@@ -92,7 +94,27 @@ export default function PaymentConfirmation({
           </div>
 
           <div className="action-buttons-wrapper">
-            <button onClick={onBackToDashboard} className="btn btn-primary btn-glow dashboard-action-btn">
+            <button 
+              onClick={() => navigate(`/transactions/${transaction.id}`)} 
+              className="btn btn-primary btn-glow dashboard-action-btn font-mono"
+            >
+              <Eye className="btn-icon" />
+              <span>Inspect Security Details</span>
+            </button>
+
+            <button 
+              onClick={() => navigate('/transactions')} 
+              className="btn btn-secondary dashboard-action-btn font-mono"
+            >
+              <History className="btn-icon" />
+              <span>View Transaction History</span>
+            </button>
+
+            <button 
+              onClick={onBackToDashboard} 
+              className="btn btn-secondary dashboard-action-btn font-mono"
+              style={{ border: 'none', background: 'transparent', textDecoration: 'underline', color: 'var(--text-dimmed)', marginTop: '8px' }}
+            >
               <ArrowLeft className="btn-icon" />
               <span>Back to Dashboard</span>
             </button>

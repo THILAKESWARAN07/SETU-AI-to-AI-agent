@@ -4,6 +4,8 @@ import Dashboard from './pages/Dashboard';
 import Shopping from './pages/Shopping';
 import Negotiation from './pages/Negotiation';
 import Payment from './pages/Payment';
+import Transactions from './pages/Transactions';
+import TransactionDetails from './pages/TransactionDetails';
 
 function App() {
   return (
@@ -14,6 +16,8 @@ function App() {
           <Route path="/shopping" element={<Shopping />} />
           <Route path="/negotiation" element={<Negotiation />} />
           <Route path="/payment" element={<Payment />} />
+          <Route path="/transactions" element={<Transactions />} />
+          <Route path="/transactions/:id" element={<TransactionDetails />} />
         </Routes>
       </DashboardLayout>
     </BrowserRouter>

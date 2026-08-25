@@ -1,0 +1,192 @@
+.transaction-list-wrapper {
+  width: 100%;
+}
+
+/* Desktop Table styles */
+.transactions-table-container {
+  width: 100%;
+  overflow-x: auto;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 4px 25px rgba(0, 0, 0, 0.25);
+}
+
+.transactions-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.transactions-table th {
+  padding: 18px 24px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  border-bottom: 1px solid var(--border-color);
+  background-color: rgba(255, 255, 255, 0.01);
+}
+
+.transactions-table td {
+  padding: 16px 24px;
+  font-size: 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+}
+
+.transaction-row {
+  transition: background-color var(--transition-fast);
+}
+
+.transaction-row:hover {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.transaction-row:last-child td {
+  border-bottom: none;
+}
+
+.action-header {
+  text-align: right !important;
+}
+
+.action-cell {
+  text-align: right;
+}
+
+.view-details-btn {
+  padding: 6px 14px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 6px;
+}
+
+.view-details-btn:hover {
+  background-color: var(--primary);
+  border-color: var(--primary);
+  color: var(--text-main);
+  box-shadow: 0 0 10px var(--primary-glow);
+}
+
+/* Status Badges */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 50px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border: 1px solid transparent;
+}
+
+.status-badge .badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.status-badge.success {
+  background-color: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.2);
+  color: var(--accent-green);
+}
+
+.status-badge.success .badge-dot {
+  background-color: var(--accent-green);
+  box-shadow: 0 0 6px var(--accent-green);
+}
+
+.status-badge.pending {
+  background-color: rgba(234, 179, 8, 0.08);
+  border-color: rgba(234, 179, 8, 0.2);
+  color: var(--accent-orange);
+}
+
+.status-badge.pending .badge-dot {
+  background-color: var(--accent-orange);
+  box-shadow: 0 0 6px var(--accent-orange);
+}
+
+.status-badge.failed {
+  background-color: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.2);
+  color: var(--accent-red);
+}
+
+.status-badge.failed .badge-dot {
+  background-color: var(--accent-red);
+  box-shadow: 0 0 6px var(--accent-red);
+}
+
+/* Mobile Card View (hidden by default) */
+.transactions-card-list {
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.transaction-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.card-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-txn-id {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.card-body-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.75rem;
+}
+
+.card-body-item {
+  display: flex;
+  justify-content: space-between;
+}
+
+.card-lbl {
+  color: var(--text-dimmed);
+}
+
+.card-val {
+  text-align: right;
+}
+
+.card-divider {
+  height: 1px;
+  background-color: var(--border-color);
+}
+
+.card-action-btn {
+  width: 100%;
+  padding: 10px;
+  font-size: 0.75rem;
+  justify-content: center;
+}
+
+@media (max-width: 992px) {
+  .transactions-table-container {
+    display: none;
+  }
+  
+  .transactions-card-list {
+    display: flex;
+  }
+}
