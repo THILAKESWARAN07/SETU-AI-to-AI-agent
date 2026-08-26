@@ -57,7 +57,16 @@ export default function Dashboard() {
 
   const navigate = useNavigate();
 
-  const handleStartShopping = () => {
+  const handleStartDemo = () => {
+    navigate('/negotiation', {
+      state: {
+        intent: "I need wireless earbuds under ₹2,000.",
+        budget: 2000
+      }
+    });
+  };
+
+  const handleStartCustom = () => {
     navigate('/shopping');
   };
 
@@ -70,17 +79,20 @@ export default function Dashboard() {
           <span>SETU Trust Layer v1.0.0</span>
         </div>
         <h1 className="hero-title">
-          SETU
-          <span className="hero-title-accent">AI-to-AI Commerce Platform</span>
+          SETU — AI Agents That
+          <span className="hero-title-accent">Negotiate Commerce Safely</span>
         </h1>
         <p className="hero-desc">
-          Autonomous commerce where AI agents discover, negotiate, verify, and securely complete purchases.
+          Buyer and Merchant agents negotiate autonomously. SETU enforces the rules, locks the deal, and protects payment.
         </p>
         
-        <div className="hero-actions">
-          <button onClick={handleStartShopping} className="btn btn-primary btn-glow">
+        <div className="hero-actions" style={{ display: 'flex', gap: '16px', justifyContent: 'center' }}>
+          <button onClick={handleStartDemo} className="btn btn-primary btn-glow" style={{ padding: '12px 24px', fontSize: '0.95rem' }}>
             <Play className="btn-icon" />
-            <span>Start Shopping</span>
+            <span>START AI COMMERCE DEMO</span>
+          </button>
+          <button onClick={handleStartCustom} className="btn btn-secondary" style={{ padding: '12px 24px', fontSize: '0.95rem', borderColor: 'var(--border-color)', color: 'var(--text-main)' }}>
+            <span>TRY CUSTOM INTENT</span>
           </button>
         </div>
       </section>

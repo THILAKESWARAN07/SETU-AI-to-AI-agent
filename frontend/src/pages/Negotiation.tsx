@@ -822,11 +822,36 @@ export default function Negotiation() {
                 </span>
               </div>
 
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-dimmed)', lineHeight: '1.4' }}>
-                {isDealApproved 
-                  ? 'The negotiated deal passes all active minimum profit margin and buyer budget checks. Proceed to secure Razorpay payment handoff.' 
-                  : `This deal proposal has been terminated by the Policy Engine. Reason: ${result.reasons.join(', ')}`}
-              </div>
+              {!isDealApproved ? (
+                <div style={{ 
+                  backgroundColor: 'rgba(239, 68, 68, 0.04)',
+                  border: '1px solid rgba(239, 68, 68, 0.2)',
+                  borderRadius: '8px',
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                  fontSize: '0.8rem',
+                  lineHeight: '1.4'
+                }}>
+                  <div>
+                    <span style={{ fontWeight: 700, display: 'block', fontSize: '0.7rem', textTransform: 'uppercase', color: '#ef4444', letterSpacing: '0.05em', marginBottom: '2px' }}>What Happened</span>
+                    <span style={{ color: 'var(--text-main)', fontWeight: 600 }}>REQUEST BLOCKED</span>
+                  </div>
+                  <div>
+                    <span style={{ fontWeight: 700, display: 'block', fontSize: '0.7rem', textTransform: 'uppercase', color: '#ef4444', letterSpacing: '0.05em', marginBottom: '2px' }}>Why SETU Stopped It</span>
+                    <span style={{ color: 'var(--text-muted)' }}>{result.reasons.join('. ')}</span>
+                  </div>
+                  <div>
+                    <span style={{ fontWeight: 700, display: 'block', fontSize: '0.7rem', textTransform: 'uppercase', color: '#ef4444', letterSpacing: '0.05em', marginBottom: '2px' }}>Enforcing Authority</span>
+                    <span style={{ color: 'var(--text-muted)' }}>SETU PolicyEngine</span>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-dimmed)', lineHeight: '1.4' }}>
+                  The negotiated deal passes all active minimum profit margin and buyer budget checks. Proceed to secure Razorpay payment handoff.
+                </div>
+              )}
 
               {isDealApproved ? (
                 <button 
@@ -851,7 +876,7 @@ export default function Negotiation() {
                     width: '100%',
                     justifyContent: 'center',
                     padding: '12px',
-                    borderColor: 'rgba(239, 68, 68, 0.3)',
+                    borderColor: 'rgba(239, 68, 68, 0.4)',
                     color: '#ef4444'
                   }}
                 >
