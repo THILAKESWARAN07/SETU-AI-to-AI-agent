@@ -459,6 +459,15 @@ class DemoCommerceResponse(BaseModel):
     merchant_objective: str = "Maximize sales margins & bundle volume conversion"
     merchant_tools_used: List[str] = []
     merchant_confidence: float = 1.0
+    
+    # Step 12 metadata
+    provider: str = "MockProvider"
+    model: str = "mock-model-v2"
+    execution_mode: str = "OFFLINE MOCK"
+    session_id: str = "session_mock"
+    agent_role: str = "BUYER_AGENT & MERCHANT_AGENT"
+    start_time: str = ""
+    completion_time: str = ""
 
 @app.post("/api/demo/commerce", response_model=DemoCommerceResponse)
 def run_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depends(get_db)):

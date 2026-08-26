@@ -110,6 +110,14 @@ export interface DemoCommerceResponse {
   merchant_objective?: string;
   merchant_tools_used?: string[];
   merchant_confidence?: number;
+  
+  // Step 12 metadata
+  provider?: string;
+  model?: string;
+  execution_mode?: string;
+  session_id?: string;
+  start_time?: string;
+  completion_time?: string;
 }
 
 export interface AttackTestRequest {

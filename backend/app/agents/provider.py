@@ -63,6 +63,14 @@ class LLMProvider(ABC):
     def agent_mode(self) -> str:
         return "LIVE LLM"
 
+    @property
+    def provider_name(self) -> str:
+        return "GenericProvider"
+
+    @property
+    def model_name(self) -> str:
+        return "generic-model"
+
     @abstractmethod
     def generate_response(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -87,6 +95,14 @@ class MockProvider(LLMProvider):
     @property
     def agent_mode(self) -> str:
         return "OFFLINE MOCK"
+
+    @property
+    def provider_name(self) -> str:
+        return "MockProvider"
+
+    @property
+    def model_name(self) -> str:
+        return "mock-model-v2"
     def generate_response(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         prompt_lower = prompt.lower()
 
@@ -543,9 +559,17 @@ class MockLLMProvider(MockProvider):
 # --- ENVIRONMENT CONFIGURED LLM PROVIDERS ---
 
 class GeminiProvider(LLMProvider):
+    @property
+    def provider_name(self) -> str:
+        return "Gemini"
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
     def __init__(self, api_key: str, model_name: Optional[str] = None):
         self.api_key = api_key
-        self.model_name = model_name or "gemini-1.5-flash"
+        self._model_name = model_name or "gemini-1.5-flash"
         try:
             import google.generativeai as genai
             genai.configure(api_key=self.api_key)
@@ -638,9 +662,17 @@ class GeminiProvider(LLMProvider):
 
 
 class OpenAIProvider(LLMProvider):
+    @property
+    def provider_name(self) -> str:
+        return "OpenAI"
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
     def __init__(self, api_key: str, model_name: Optional[str] = None):
         self.api_key = api_key
-        self.model_name = model_name or "gpt-4o-mini"
+        self._model_name = model_name or "gpt-4o-mini"
         try:
             import openai
             self.client = openai.OpenAI(api_key=self.api_key)

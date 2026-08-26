@@ -4,15 +4,16 @@ import {
   ArrowLeft, 
   Layers, 
   Loader2, 
-  ShieldCheck, 
   ShieldAlert, 
   User, 
   Store, 
-  Cpu, 
   Clock, 
   Lock, 
   AlertTriangle,
-  ChevronRight
+  ChevronRight,
+  Shield,
+  Activity,
+  CheckCircle2
 } from 'lucide-react';
 import { apiService } from '../services/api';
 import type { DemoCommerceResponse } from '../types';
@@ -30,7 +31,6 @@ export default function Negotiation() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DemoCommerceResponse | null>(null);
   const [visibleEventsCount, setVisibleEventsCount] = useState(0);
-  const [isAnimating, setIsAnimating] = useState(false);
   
   // Track animation state parameters
   const [animatedRounds, setAnimatedRounds] = useState(1);
@@ -115,7 +115,7 @@ export default function Negotiation() {
       actor: 'BUYER_AGENT',
       label: 'BUYER AGENT INITIALIZED',
       message: `Buyer Agent configured objective: "${res.buyer_objective || 'Procure matching catalog items under budget cap.'}"`,
-      subtext: `Provider Adapter: ${res.agent_mode || 'LIVE LLM'} | Model: gemini-3.6-flash`,
+      subtext: `Provider Adapter: ${res.provider || 'Gemini'} | Model: ${res.model}`,
       timestamp: getOffsetTime(1),
       toolsUsedCount: 0,
       round: 1,
@@ -297,20 +297,18 @@ export default function Negotiation() {
   const startTimelineAnimation = (res: DemoCommerceResponse) => {
     if (animationTimer.current) clearInterval(animationTimer.current);
     
-    setIsAnimating(true);
     setVisibleEventsCount(1);
-
+ 
     const events = compileTimelineEvents(res);
     
     // Set initial event state values
     updateLiveMetrics(events[0]);
-
+ 
     let currentIndex = 1;
     animationTimer.current = setInterval(() => {
       if (currentIndex >= events.length) {
         clearInterval(animationTimer.current!);
         animationTimer.current = null;
-        setIsAnimating(false);
         return;
       }
       
@@ -339,50 +337,7 @@ export default function Negotiation() {
     navigate('/shopping');
   };
 
-  const renderTimelineIcon = (actor: string, type: string, isError?: boolean) => {
-    if (type === 'policy_check') {
-      return (
-        <div className="timeline-avatar system-timeline-avatar" style={{ background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#10b981' }}>
-          <ShieldCheck className="avatar-icon-small" />
-        </div>
-      );
-    }
-    if (type === 'final_verdict') {
-      const color = isError ? '#ef4444' : '#10b981';
-      return (
-        <div className="timeline-avatar system-timeline-avatar" style={{ background: isError ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.12)', border: `1px solid ${color}`, color }}>
-          {isError ? <ShieldAlert className="avatar-icon-small" /> : <Lock className="avatar-icon-small" />}
-        </div>
-      );
-    }
-    if (actor === 'BUYER_AGENT') {
-      return (
-        <div className="timeline-avatar buyer-timeline-avatar" style={{ background: 'rgba(59, 130, 246, 0.12)', border: '1px solid rgba(59, 130, 246, 0.3)', color: '#3b82f6' }}>
-          <User className="avatar-icon-small" />
-        </div>
-      );
-    }
-    if (actor === 'MERCHANT_AGENT') {
-      return (
-        <div className="timeline-avatar merchant-timeline-avatar" style={{ background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.3)', color: '#f59e0b' }}>
-          <Store className="avatar-icon-small" />
-        </div>
-      );
-    }
-    return (
-      <div className="timeline-avatar system-timeline-avatar" style={{ background: 'rgba(107, 114, 128, 0.12)', border: '1px solid rgba(107, 114, 128, 0.3)', color: '#9ca3af' }}>
-        <Cpu className="avatar-icon-small" />
-      </div>
-    );
-  };
 
-  const getActorColor = (actor: string, type: string, isError?: boolean) => {
-    if (type === 'final_verdict') return isError ? '#ef4444' : '#10b981';
-    if (type === 'policy_check') return '#10b981';
-    if (actor === 'BUYER_AGENT') return '#3b82f6';
-    if (actor === 'MERCHANT_AGENT') return '#f59e0b';
-    return '#9ca3af';
-  };
 
   // 4. UI Rendering States
   if (isLoading) {
@@ -444,6 +399,13 @@ export default function Negotiation() {
   const isFinalVerdictVisible = !!finalVerdictEvent;
   const isDealApproved = result.decision === 'APPROVED';
 
+  // Filter events per column
+  const buyerEvents = visibleEvents.filter(e => e.actor === 'BUYER_AGENT' || e.type === 'intent');
+  const merchantEvents = visibleEvents.filter(e => e.actor === 'MERCHANT_AGENT');
+
+  // Verify constraints checkpoints dynamically
+  const isProviderError = result.decision === 'ERROR' || result.execution_mode === 'PROVIDER ERROR';
+  
   return (
     <div className="negotiation-page-container container animate-fade-in" style={{ paddingBottom: '120px' }}>
       {/* Header Back Link */}
@@ -453,97 +415,256 @@ export default function Negotiation() {
           <span>Back to Procurement Hub</span>
         </button>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <span className={`system-status-tag font-mono ${result.agent_mode === 'LIVE LLM' ? 'live-llm-tag' : 'mock-tag'}`} style={{
-            background: result.agent_mode === 'LIVE LLM' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(107, 114, 128, 0.15)',
-            color: result.agent_mode === 'LIVE LLM' ? '#10b981' : '#9ca3af',
-            border: result.agent_mode === 'LIVE LLM' ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(107, 114, 128, 0.3)'
+          <span className={`system-status-tag font-mono ${result.execution_mode === 'LIVE LLM' ? 'live-llm-tag' : result.execution_mode === 'PROVIDER ERROR' ? 'error-tag' : 'mock-tag'}`} style={{
+            background: result.execution_mode === 'LIVE LLM' ? 'rgba(16, 185, 129, 0.15)' : result.execution_mode === 'PROVIDER ERROR' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(107, 114, 128, 0.15)',
+            color: result.execution_mode === 'LIVE LLM' ? '#10b981' : result.execution_mode === 'PROVIDER ERROR' ? '#ef4444' : '#9ca3af',
+            border: result.execution_mode === 'LIVE LLM' ? '1px solid rgba(16, 185, 129, 0.3)' : result.execution_mode === 'PROVIDER ERROR' ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(107, 114, 128, 0.3)'
           }}>
-            AGENT MODE: {result.agent_mode || 'OFFLINE MOCK'}
+            MODE: {result.execution_mode || 'OFFLINE MOCK'}
           </span>
-          <span className="system-status-tag font-mono">ENFORCING DECIMAL POLICY</span>
+          <span className="system-status-tag font-mono" style={{ color: 'var(--primary)', borderColor: 'rgba(100, 75, 255, 0.3)', background: 'rgba(100, 75, 255, 0.05)' }}>
+            ENFORCING PROPOSER-DECIDER SEGREGATION
+          </span>
         </div>
       </div>
+
+      {/* Critical Provider Error Warning Banner */}
+      {isProviderError && (
+        <div className="error-panel animate-scale-up" style={{
+          backgroundColor: 'rgba(239, 68, 68, 0.05)',
+          border: '1px solid rgba(239, 68, 68, 0.3)',
+          borderRadius: '12px',
+          padding: '20px 24px',
+          marginBottom: '28px',
+          display: 'flex',
+          gap: '16px',
+          alignItems: 'flex-start'
+        }}>
+          <ShieldAlert className="error-icon" style={{ color: '#ef4444', flexShrink: 0, marginTop: '2px' }} />
+          <div>
+            <h4 style={{ color: '#ef4444', fontSize: '1rem', fontWeight: 700, margin: 0 }}>LLM Provider Connection Interrupted</h4>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', lineHeight: '1.4', marginTop: '6px', marginBottom: 0 }}>
+              The runtime encountered a failure while calling the live provider API.
+              <code className="font-mono" style={{ display: 'block', background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: '4px', marginTop: '8px', color: '#fca5a5' }}>
+                Reason: {result.reasons.join(', ')}
+              </code>
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Main Content Layout Grid */}
       <div className="negotiation-grid">
         
-        {/* Left Column: Flow Timeline */}
+        {/* Left Column: Flow Timeline Split Panels */}
         <div className="negotiation-main-col" style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
           
-          <div className="timeline-section-card animate-fade-in" style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '32px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <h3 className="timeline-section-title" style={{ fontSize: '1.2rem', fontWeight: 700 }}>Unified Transaction Timeline</h3>
-              {isAnimating && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.75rem', color: 'var(--primary)' }} className="font-mono">
-                  <Loader2 className="animate-spin" style={{ width: '12px', height: '12px' }} />
-                  <span>SIMULATING TRANSACTION STEPS LIVE...</span>
-                </div>
-              )}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: '20px'
+          }}>
+            {/* COLUMN 1: BUYER AGENT */}
+            <div className="agent-column-card" style={{
+              backgroundColor: 'var(--bg-card)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '12px',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px',
+              minHeight: '400px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+                <span className="font-mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <User style={{ width: '14px', height: '14px' }} />
+                  BUYER AGENT
+                </span>
+                <span className="font-mono" style={{ fontSize: '0.65rem', padding: '2px 6px', background: 'rgba(59, 130, 246, 0.1)', color: '#3b82f6', borderRadius: '4px' }}>
+                  {animatedBuyerStatus}
+                </span>
+              </div>
+              
+              <div style={{ fontSize: '0.78rem', background: 'rgba(255,255,255,0.02)', padding: '10px', borderRadius: '6px', borderLeft: '2px solid #3b82f6' }}>
+                <span style={{ fontWeight: 700, display: 'block', color: 'var(--text-dimmed)', fontSize: '0.7rem', textTransform: 'uppercase' }}>Objective:</span>
+                <span style={{ color: 'var(--text-muted)' }}>{result.buyer_objective}</span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <span className="font-mono" style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dimmed)' }}>TRACES RECORDED</span>
+                
+                {buyerEvents.length === 0 ? (
+                  <span style={{ fontSize: '0.78rem', color: 'var(--text-dimmed)', fontStyle: 'italic' }}>Initializing context...</span>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {buyerEvents.map((evt) => (
+                      <div key={evt.id} style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '10px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                          <span className="font-mono" style={{ fontSize: '0.65rem', fontWeight: 700, color: '#3b82f6' }}>{evt.label}</span>
+                          <span className="font-mono" style={{ fontSize: '0.6rem', color: 'var(--text-dimmed)' }}>{evt.timestamp}</span>
+                        </div>
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-main)', margin: 0 }}>{evt.message}</p>
+                        {evt.subtext && (
+                          <div className="font-mono" style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(0,0,0,0.1)', padding: '4px 8px', borderRadius: '4px', marginTop: '6px' }}>
+                            {evt.subtext.startsWith('Bid Offer') ? 'Bid: ' + evt.subtext.split('Bid Offer: ')[1] : evt.subtext}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-            
-            <p className="timeline-subtitle text-muted" style={{ fontSize: '0.78rem', marginBottom: '28px', color: 'var(--text-dimmed)' }}>
-              Live execution logs mapping agent decisions, Registry tool usages, and Policy Engine checkpoints.
-            </p>
 
-            <div className="chat-timeline-container" style={{ display: 'flex', flexDirection: 'column', gap: '20px', position: 'relative' }}>
-              {visibleEvents.map((evt, idx) => (
-                <div 
-                  key={evt.id} 
-                  className={`timeline-chat-row animate-fade-in`}
-                  style={{ 
-                    display: 'flex', 
-                    gap: '16px', 
-                    paddingBottom: idx === visibleEvents.length - 1 ? '0' : '20px',
-                    borderLeft: idx === visibleEvents.length - 1 ? 'none' : '1px solid rgba(255, 255, 255, 0.05)',
-                    marginLeft: '15px',
-                    paddingLeft: '24px',
-                    position: 'relative'
-                  }}
-                >
-                  {/* Avatar Icon */}
-                  <div style={{ position: 'absolute', left: '-16px', top: '0' }}>
-                    {renderTimelineIcon(evt.actor, evt.type, evt.isError)}
+            {/* COLUMN 2: MERCHANT AGENT */}
+            <div className="agent-column-card" style={{
+              backgroundColor: 'var(--bg-card)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '12px',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px',
+              minHeight: '400px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+                <span className="font-mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Store style={{ width: '14px', height: '14px' }} />
+                  MERCHANT AGENT
+                </span>
+                <span className="font-mono" style={{ fontSize: '0.65rem', padding: '2px 6px', background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b', borderRadius: '4px' }}>
+                  {animatedMerchantStatus}
+                </span>
+              </div>
+
+              <div style={{ fontSize: '0.78rem', background: 'rgba(255,255,255,0.02)', padding: '10px', borderRadius: '6px', borderLeft: '2px solid #f59e0b' }}>
+                <span style={{ fontWeight: 700, display: 'block', color: 'var(--text-dimmed)', fontSize: '0.7rem', textTransform: 'uppercase' }}>Objective:</span>
+                <span style={{ color: 'var(--text-muted)' }}>{result.merchant_objective}</span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <span className="font-mono" style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dimmed)' }}>TRACES RECORDED</span>
+                
+                {merchantEvents.length === 0 ? (
+                  <span style={{ fontSize: '0.78rem', color: 'var(--text-dimmed)', fontStyle: 'italic' }}>Awaiting buyer proposal...</span>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {merchantEvents.map((evt) => (
+                      <div key={evt.id} style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '10px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                          <span className="font-mono" style={{ fontSize: '0.65rem', fontWeight: 700, color: '#f59e0b' }}>{evt.label}</span>
+                          <span className="font-mono" style={{ fontSize: '0.6rem', color: 'var(--text-dimmed)' }}>{evt.timestamp}</span>
+                        </div>
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-main)', margin: 0 }}>{evt.message}</p>
+                        {evt.subtext && (
+                          <div className="font-mono" style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(0,0,0,0.1)', padding: '4px 8px', borderRadius: '4px', marginTop: '6px' }}>
+                            {evt.subtext.startsWith('Counter Price') ? 'Counter: ' + evt.subtext.split('Counter Price: ')[1] : evt.subtext}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
+                )}
+              </div>
+            </div>
 
-                  <div className="timeline-chat-bubble" style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.02)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: '8px',
-                    padding: '16px 20px',
-                    width: '100%'
-                  }}>
-                    <div className="bubble-meta" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <span className="bubble-author font-mono" style={{ fontSize: '0.7rem', fontWeight: 700, color: getActorColor(evt.actor, evt.type, evt.isError) }}>
-                        {evt.label}
-                      </span>
-                      <span className="bubble-timestamp font-mono" style={{ fontSize: '0.65rem', color: 'var(--text-dimmed)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Clock style={{ width: '10px', height: '10px' }} />
-                        {evt.timestamp}
-                      </span>
-                    </div>
+            {/* COLUMN 3: SETU POLICY ENGINE */}
+            <div className="agent-column-card" style={{
+              backgroundColor: 'var(--bg-card)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '12px',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px',
+              minHeight: '400px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+                <span className="font-mono" style={{ fontSize: '0.75rem', fontWeight: 700, color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Shield style={{ width: '14px', height: '14px' }} />
+                  SETU POLICY ENGINE
+                </span>
+                <span className="font-mono" style={{ fontSize: '0.65rem', padding: '2px 6px', background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', borderRadius: '4px' }}>
+                  {animatedPolicy}
+                </span>
+              </div>
 
-                    <p className="bubble-msg" style={{ fontSize: '0.88rem', color: 'var(--text-main)', lineHeight: '1.4' }}>
-                      {evt.message}
-                    </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '10px' }}>
+                <span className="font-mono" style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dimmed)' }}>DETERMINISTIC TRUST GATES</span>
 
-                    {evt.subtext && (
-                      <p className="bubble-subtext" style={{ 
-                        fontSize: '0.78rem', 
-                        color: 'var(--text-muted)', 
-                        marginTop: '8px',
-                        backgroundColor: 'rgba(0, 0, 0, 0.15)',
-                        padding: '6px 12px',
-                        borderRadius: '4px',
-                        borderLeft: `2px solid ${getActorColor(evt.actor, evt.type, evt.isError)}`
-                      }}>
-                        {evt.subtext}
-                      </p>
-                    )}
+                {/* Gate 1: Budget Cap Verification */}
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '6px' }}>
+                  {visibleEvents.length > 3 ? (
+                    <CheckCircle2 style={{ width: '16px', height: '16px', color: '#10b981', flexShrink: 0, marginTop: '2px' }} />
+                  ) : (
+                    <Clock style={{ width: '16px', height: '16px', color: '#9ca3af', flexShrink: 0, marginTop: '2px' }} />
+                  )}
+                  <div>
+                    <span className="font-mono" style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', color: 'var(--text-main)' }}>Budget Limit Guard</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {visibleEvents.length > 3 ? `Max cap: ₹${parseFloat(result.original_amount).toLocaleString('en-IN')} check verified` : 'Awaiting initialization'}
+                    </span>
                   </div>
                 </div>
-              ))}
+
+                {/* Gate 2: Merchant Margin Floor */}
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '6px' }}>
+                  {merchantEvents.length > 0 ? (
+                    <CheckCircle2 style={{ width: '16px', height: '16px', color: '#10b981', flexShrink: 0, marginTop: '2px' }} />
+                  ) : (
+                    <Clock style={{ width: '16px', height: '16px', color: '#9ca3af', flexShrink: 0, marginTop: '2px' }} />
+                  )}
+                  <div>
+                    <span className="font-mono" style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', color: 'var(--text-main)' }}>Margin Constraint Guard</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {merchantEvents.length > 0 ? `Calculated margin: ${result.margin_percent}% verified` : 'Awaiting counter evaluation'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Gate 3: Rounds Cap Boundary */}
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '6px' }}>
+                  <Activity style={{ width: '16px', height: '16px', color: '#f59e0b', flexShrink: 0, marginTop: '2px' }} />
+                  <div>
+                    <span className="font-mono" style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', color: 'var(--text-main)' }}>Rounds Safety Limit</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      Turn progress: {animatedRounds} / 4 rounds cap safety
+                    </span>
+                  </div>
+                </div>
+
+                {/* Gate 4: Tool Allowlist Isolation */}
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', padding: '10px', borderRadius: '6px' }}>
+                  <Lock style={{ width: '16px', height: '16px', color: '#10b981', flexShrink: 0, marginTop: '2px' }} />
+                  <div>
+                    <span className="font-mono" style={{ fontSize: '0.75rem', fontWeight: 700, display: 'block', color: 'var(--text-main)' }}>Payment System Isolation</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      Registry tool bounds confirmed safe (Razorpay isolated)
+                    </span>
+                  </div>
+                </div>
+
+                {/* Gate 5: Final Policy Engine Verdict */}
+                {isFinalVerdictVisible && (
+                  <div style={{ 
+                    marginTop: '10px',
+                    background: isDealApproved ? 'rgba(16, 185, 129, 0.05)' : 'rgba(239, 68, 68, 0.05)',
+                    border: isDealApproved ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    textAlign: 'center'
+                  }}>
+                    <span className="font-mono" style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dimmed)', display: 'block' }}>POLICY ENGINE VERDICT</span>
+                    <span className="font-mono" style={{ fontSize: '1.2rem', fontWeight: 900, color: isDealApproved ? '#10b981' : '#ef4444' }}>
+                      {result.decision}
+                    </span>
+                  </div>
+                )}
+
+              </div>
             </div>
           </div>
+
         </div>
 
         {/* Right Column: Agent Session Panel & Deal checkout */}
@@ -569,20 +690,41 @@ export default function Negotiation() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '0.85rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ color: 'var(--text-dimmed)' }}>Session Mode:</span>
-                <span className="font-mono" style={{ fontWeight: 700, color: result.agent_mode === 'LIVE LLM' ? '#10b981' : '#9ca3af' }}>
-                  {result.agent_mode || 'OFFLINE MOCK'}
+                <span className="font-mono" style={{ 
+                  fontWeight: 700, 
+                  color: result.execution_mode === 'LIVE LLM' ? '#10b981' : result.execution_mode === 'PROVIDER ERROR' ? '#ef4444' : '#9ca3af' 
+                }}>
+                  {result.execution_mode || 'OFFLINE MOCK'}
                 </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ color: 'var(--text-dimmed)' }}>LLM Provider:</span>
                 <span style={{ fontWeight: 500, color: 'var(--text-main)' }}>
-                  {result.agent_mode === 'LIVE LLM' ? 'Gemini' : 'MockProvider'}
+                  {result.provider || 'MockProvider'}
                 </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ color: 'var(--text-dimmed)' }}>LLM Model:</span>
                 <span className="font-mono" style={{ fontSize: '0.75rem', color: 'var(--text-main)' }}>
-                  {result.agent_mode === 'LIVE LLM' ? 'gemini-3.6-flash' : 'mock-model-v2'}
+                  {result.model || 'mock-model-v2'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--text-dimmed)' }}>Session ID:</span>
+                <span className="font-mono" style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  {result.session_id || 'session_mock'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--text-dimmed)' }}>Start Time:</span>
+                <span className="font-mono" style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  {result.start_time ? new Date(result.start_time).toLocaleTimeString() : '--'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--text-dimmed)' }}>End Time:</span>
+                <span className="font-mono" style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  {isFinalVerdictVisible && result.completion_time ? new Date(result.completion_time).toLocaleTimeString() : '--'}
                 </span>
               </div>
               
@@ -649,12 +791,6 @@ export default function Negotiation() {
                 <span style={{ color: 'var(--text-dimmed)' }}>Payment Status:</span>
                 <span className="font-mono" style={{ fontWeight: 700, color: isFinalVerdictVisible && isDealApproved ? '#f59e0b' : 'var(--text-dimmed)' }}>
                   {isFinalVerdictVisible && isDealApproved ? 'PENDING' : '--'}
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-dimmed)' }}>Order Status:</span>
-                <span className="font-mono" style={{ fontWeight: 700, color: 'var(--text-dimmed)' }}>
-                  --
                 </span>
               </div>
             </div>

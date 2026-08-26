@@ -2,13 +2,19 @@ import { Key, ShieldAlert, Cpu, ArrowRight, ShieldCheck } from 'lucide-react';
 import './ToolAccessPanel.css';
 
 export default function ToolAccessPanel() {
-  const allowedTools = [
-    { name: 'view_product', desc: 'Allows the agent to retrieve catalog listing descriptions and prices.' },
-    { name: 'search_catalog', desc: 'Allows searching catalog indexes for relevant recommendations.' },
-    { name: 'identify_related_product', desc: 'Identifies related cross-sells for recommendation slots.' },
-    { name: 'create_bundle_offer', desc: 'Combines selected listings into structured discounted offers.' },
-    { name: 'negotiate', desc: 'Runs AI procurement reasoning to propose Counter-Offers.' },
-    { name: 'request_purchase', desc: 'Submits a finalised proposal to the backend Policy Engine.' }
+  const buyerTools = [
+    { name: 'search_catalog', desc: 'Allows scanning the store catalog for items matching buyer intent.' },
+    { name: 'get_product_details', desc: 'Allows reading detailed catalog specifications, stock counts, and prices.' },
+    { name: 'get_policy_constraints', desc: 'Retrieves active budget constraints and policy rules for negotiation.' },
+    { name: 'evaluate_budget', desc: 'Validates candidate offer amounts against user-configured budget caps.' },
+    { name: 'request_purchase', desc: 'Submits a finalized negotiated deal proposal to the backend Policy Engine.' }
+  ];
+
+  const merchantTools = [
+    { name: 'get_inventory', desc: 'Allows reading current inventory count of items in stock.' },
+    { name: 'get_product_price', desc: 'Fetches catalog base pricing and unit cost bounds for the product.' },
+    { name: 'get_merchant_constraints', desc: 'Reads merchant policy constraints, margin floors, and discount limits.' },
+    { name: 'evaluate_margin', desc: 'Evaluates the buyer\'s offer to check compliance with min margin requirements.' }
   ];
 
   const excludedTools = [
@@ -30,7 +36,7 @@ export default function ToolAccessPanel() {
         <div className="tool-flow-diagram font-mono">
           <div className="flow-node agent">
             <Cpu className="node-icon text-primary" />
-            <span>Buyer Agent</span>
+            <span>AI Agents</span>
           </div>
           <ArrowRight className="flow-arrow text-dimmed" />
           
@@ -56,13 +62,35 @@ export default function ToolAccessPanel() {
           {/* Allowed Tools */}
           <div className="allowed-tools-box">
             <h4 className="box-title font-mono text-green">ALLOWED REGISTERED TOOLS</h4>
-            <div className="tools-list font-mono">
-              {allowedTools.map(tool => (
-                <div key={tool.name} className="tool-item">
-                  <span className="tool-name text-white">{tool.name}</span>
-                  <p className="tool-desc text-dimmed">{tool.desc}</p>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div>
+                <span className="font-mono text-primary" style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px', display: 'block', marginBottom: '8px' }}>
+                  Buyer Agent Permissions
+                </span>
+                <div className="tools-list font-mono">
+                  {buyerTools.map(tool => (
+                    <div key={tool.name} className="tool-item">
+                      <span className="tool-name text-white">{tool.name}</span>
+                      <p className="tool-desc text-dimmed">{tool.desc}</p>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+
+              <div>
+                <span className="font-mono text-orange" style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border-color)', paddingBottom: '4px', display: 'block', marginBottom: '8px' }}>
+                  Merchant Agent Permissions
+                </span>
+                <div className="tools-list font-mono">
+                  {merchantTools.map(tool => (
+                    <div key={tool.name} className="tool-item">
+                      <span className="tool-name text-white">{tool.name}</span>
+                      <p className="tool-desc text-dimmed">{tool.desc}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 

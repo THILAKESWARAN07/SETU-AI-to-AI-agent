@@ -36,9 +36,14 @@ class NegotiationOrchestrator:
         max_rounds: int = 4
     ) -> Dict[str, Any]:
         import uuid
+        import datetime
         from backend.app.agents.memory import NegotiationMemory
         
         session_id = f"session_{uuid.uuid4().hex[:8]}"
+        start_time = datetime.datetime.utcnow().isoformat() + "Z"
+        provider_name = self.buyer.provider.provider_name
+        model_name = self.buyer.provider.model_name
+        execution_mode = self.buyer.provider.agent_mode
         
         # 1. Start session memory
         memory = NegotiationMemory(session_id=session_id, product_id=1)
@@ -75,7 +80,7 @@ class NegotiationOrchestrator:
         original_amount = Decimal("0.00")
         round_idx = 1
 
-        def build_failed_result(reasons, final_price_val=None, decision_val="BLOCKED"):
+        def build_failed_result(reasons, final_price_val=None, decision_val="BLOCKED", execution_mode_override=None):
             prod_id = selected_product_id or 1
             original_amt_str = "0.00"
             if selected_product_id:
@@ -96,6 +101,9 @@ class NegotiationOrchestrator:
             except Exception:
                 policy_version = "policy_v1.0"
                 
+            completion_time = datetime.datetime.utcnow().isoformat() + "Z"
+            mode_val = execution_mode_override or execution_mode
+            
             return {
                 "buyer_id": buyer_id,
                 "intent": intent,
@@ -118,13 +126,22 @@ class NegotiationOrchestrator:
                 "discount_percent": "0.00",
                 "margin_percent": "0.00",
                 "policy_version": policy_version,
-                "agent_mode": self.buyer.provider.agent_mode,
+                "agent_mode": mode_val,
                 "buyer_objective": memory.buyer_goal,
                 "buyer_tools_used": list(self.buyer.tools_called_in_session),
                 "buyer_confidence": self.buyer.last_confidence,
                 "merchant_objective": memory.merchant_goal,
                 "merchant_tools_used": list(self.merchant.tools_called_in_session),
-                "merchant_confidence": self.merchant.last_confidence
+                "merchant_confidence": self.merchant.last_confidence,
+                
+                # Step 12 metadata
+                "provider": provider_name,
+                "model": model_name,
+                "execution_mode": mode_val,
+                "session_id": session_id,
+                "agent_role": "BUYER_AGENT & MERCHANT_AGENT",
+                "start_time": start_time,
+                "completion_time": completion_time
             }
 
         # Legacy E2E and UI compatibility log triggers
@@ -164,7 +181,22 @@ class NegotiationOrchestrator:
         )
 
         # Generate buyer decision using the runtime loop
-        buyer_decision: BuyerDecision = self.buyer.negotiate_decision(self.db, buyer_prompt, memory=memory)
+        try:
+            buyer_decision: BuyerDecision = self.buyer.negotiate_decision(self.db, buyer_prompt, memory=memory)
+        except Exception as e:
+            logger.error(f"Buyer Agent LLM failure: {e}")
+            AuditEngine.log_event(
+                db=self.db,
+                actor="SYSTEM",
+                action="PROVIDER_FAILURE",
+                result="ERROR",
+                reason=f"Buyer Agent LLM call failed: {str(e)}",
+                metadata={"session_id": session_id, "provider": provider_name, "model": model_name}
+            )
+            raise NegotiationError(
+                f"LLM Provider failure: {str(e)}", 
+                build_failed_result([f"LLM Provider failure: {str(e)}"], decision_val="ERROR", execution_mode_override="PROVIDER ERROR")
+            )
 
         # Validate Buyer offer total does not exceed budget
         budget_check = evaluate_budget_tool(self.db, str(buyer_decision.total_amount), str(budget))
@@ -264,7 +296,22 @@ class NegotiationOrchestrator:
                 f"Formulate your response (COUNTER, ACCEPT, or REJECT)."
             )
 
-            merchant_decision: MerchantDecision = self.merchant.negotiate_decision(self.db, merchant_prompt, memory=memory)
+            try:
+                merchant_decision: MerchantDecision = self.merchant.negotiate_decision(self.db, merchant_prompt, memory=memory)
+            except Exception as e:
+                logger.error(f"Merchant Agent LLM failure: {e}")
+                AuditEngine.log_event(
+                    db=self.db,
+                    actor="SYSTEM",
+                    action="PROVIDER_FAILURE",
+                    result="ERROR",
+                    reason=f"Merchant Agent LLM call failed: {str(e)}",
+                    metadata={"session_id": session_id, "provider": provider_name, "model": model_name}
+                )
+                raise NegotiationError(
+                    f"LLM Provider failure: {str(e)}", 
+                    build_failed_result([f"LLM Provider failure: {str(e)}"], decision_val="ERROR", execution_mode_override="PROVIDER ERROR")
+                )
 
             # Deterministic validations on Merchant choice
             if merchant_decision.action == "REJECT":
@@ -405,7 +452,22 @@ class NegotiationOrchestrator:
                     f"Formulate your response (COUNTER, ACCEPT, or REJECT)."
                 )
 
-                buyer_decision = self.buyer.negotiate_decision(self.db, buyer_eval_prompt, memory=memory)
+                try:
+                    buyer_decision = self.buyer.negotiate_decision(self.db, buyer_eval_prompt, memory=memory)
+                except Exception as e:
+                    logger.error(f"Buyer Agent LLM failure: {e}")
+                    AuditEngine.log_event(
+                        db=self.db,
+                        actor="SYSTEM",
+                        action="PROVIDER_FAILURE",
+                        result="ERROR",
+                        reason=f"Buyer Agent LLM call failed: {str(e)}",
+                        metadata={"session_id": session_id, "provider": provider_name, "model": model_name}
+                    )
+                    raise NegotiationError(
+                        f"LLM Provider failure: {str(e)}", 
+                        build_failed_result([f"LLM Provider failure: {str(e)}"], decision_val="ERROR", execution_mode_override="PROVIDER ERROR")
+                    )
 
                 if buyer_decision.action == "REJECT":
                     AuditEngine.log_event(
@@ -641,6 +703,7 @@ class NegotiationOrchestrator:
                 entity_id=final_decision_pr_id,
                 metadata={"final_price": str(final_price), "purchase_request_id": final_decision_pr_id}
             )
+            completion_time = datetime.datetime.utcnow().isoformat() + "Z"
 
             return {
                 "buyer_id": buyer_id,
@@ -672,7 +735,16 @@ class NegotiationOrchestrator:
                 "buyer_confidence": self.buyer.last_confidence,
                 "merchant_objective": memory.merchant_goal,
                 "merchant_tools_used": self.merchant.tools_called_in_session,
-                "merchant_confidence": self.merchant.last_confidence
+                "merchant_confidence": self.merchant.last_confidence,
+                
+                # Step 12 metadata
+                "provider": provider_name,
+                "model": model_name,
+                "execution_mode": execution_mode,
+                "session_id": session_id,
+                "agent_role": "BUYER_AGENT & MERCHANT_AGENT",
+                "start_time": start_time,
+                "completion_time": completion_time
             }
 
         else:

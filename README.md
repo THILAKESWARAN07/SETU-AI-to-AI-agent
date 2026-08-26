@@ -2,6 +2,30 @@
 
 SETU is a production-quality trust layer designed for AI Growth & Agentic Commerce. It enables secure, policy-controlled B2B and consumer transactions initiated by AI buyer agents, ensuring that untrusted LLMs cannot execute or manipulate financial transfers directly.
 
+## How SETU Works
+
+```text
+  User Intent Input
+         ↓
+    Buyer Agent
+         ↓ (proposes offer)
+   Merchant Agent
+         ↓ (proposes counter/accept)
+  SETU Agent Runtime
+         ↓
+    PolicyEngine
+         ↓ (evaluation & approval)
+Locked PurchaseRequest
+         ↓ (checkout handoff)
+      Razorpay
+         ↓ (captures funds)
+Webhook Verification
+         ↓ (HMAC signature verify)
+       Order (fulfillment)
+```
+
+In this architecture, LLMs (configured via Gemini) provide the negotiation intelligence, natural language capabilities, and strategy, while SETU acts as the deterministic safety envelope. SETU restricts agent capabilities via a closed tool registry, locks financial totals server-side inside `PurchaseRequest`, and processes payments securely via isolated server routes and verified HMAC webhooks.
+
 ## Security Architecture & Boundaries
 
 The core security principle is: **The LLM is UNTRUSTED.**
