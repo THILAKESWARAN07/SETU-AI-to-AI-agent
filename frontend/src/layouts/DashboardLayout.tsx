@@ -43,9 +43,9 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
           <nav className="header-nav">
             <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Dashboard</NavLink>
-            <a href="#" className="nav-link disabled" onClick={(e) => e.preventDefault()}>Audit Trail</a>
+            <NavLink to="/trust" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Trust Center</NavLink>
+            <NavLink to="/orders" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Orders</NavLink>
             <NavLink to="/transactions" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>Transactions</NavLink>
-            <a href="#" className="nav-link disabled" onClick={(e) => e.preventDefault()}>Sandbox</a>
           </nav>
 
           <div className="header-actions">

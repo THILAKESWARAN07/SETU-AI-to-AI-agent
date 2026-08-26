@@ -1,11 +1,31 @@
-import { User, Store, Shield, Target } from 'lucide-react';
+import { User, Store, Target, Cpu, CheckCircle } from 'lucide-react';
 import './NegotiationParticipants.css';
 
 interface NegotiationParticipantsProps {
   finalAmount: string;
+  agentMode?: string;
+  buyerObjective?: string;
+  buyerToolsUsed?: string[];
+  buyerConfidence?: number;
+  merchantObjective?: string;
+  merchantToolsUsed?: string[];
+  merchantConfidence?: number;
+  decision?: string;
 }
 
-export default function NegotiationParticipants({ finalAmount }: NegotiationParticipantsProps) {
+export default function NegotiationParticipants({
+  finalAmount,
+  buyerObjective,
+  buyerToolsUsed,
+  buyerConfidence,
+  merchantObjective,
+  merchantToolsUsed,
+  merchantConfidence,
+  decision
+}: NegotiationParticipantsProps) {
+  const isApproved = decision === 'APPROVED';
+  const isBlocked = decision === 'BLOCKED';
+
   return (
     <div className="participants-container">
       {/* Buyer Agent Card */}
@@ -25,14 +45,27 @@ export default function NegotiationParticipants({ finalAmount }: NegotiationPart
             <Target className="metric-icon" />
             <div>
               <span className="metric-label">OBJECTIVE</span>
-              <p className="metric-value">Optimize bundle pricing & enforce budget limits</p>
+              <p className="metric-value">{buyerObjective || "Optimize bundle pricing & enforce budget limits"}</p>
             </div>
           </div>
           <div className="metric-row">
-            <Shield className="metric-icon" />
+            <Cpu className="metric-icon" />
             <div>
-              <span className="metric-label">BUDGET BOUNDARY</span>
-              <p className="metric-value">₹2,000.00 Max Limit</p>
+              <span className="metric-label">TOOLS USED</span>
+              <p className="metric-value" style={{ textTransform: 'none', fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                {buyerToolsUsed && buyerToolsUsed.length > 0 
+                  ? buyerToolsUsed.join(', ') 
+                  : 'search_catalog, get_product_details, evaluate_budget'}
+              </p>
+            </div>
+          </div>
+          <div className="metric-row">
+            <CheckCircle className="metric-icon" />
+            <div>
+              <span className="metric-label">CONFIDENCE & DECISION</span>
+              <p className="metric-value">
+                {((buyerConfidence ?? 1.0) * 100).toFixed(0)}% Confidence | {isApproved ? 'AGREED' : isBlocked ? 'FAILED' : 'ACTIVE'}
+              </p>
             </div>
           </div>
         </div>
@@ -60,14 +93,27 @@ export default function NegotiationParticipants({ finalAmount }: NegotiationPart
             <Target className="metric-icon" />
             <div>
               <span className="metric-label">OBJECTIVE</span>
-              <p className="metric-value">Maximize sales margins & bundle volume conversion</p>
+              <p className="metric-value">{merchantObjective || "Maximize sales margins & bundle volume conversion"}</p>
             </div>
           </div>
           <div className="metric-row">
-            <Shield className="metric-icon" />
+            <Cpu className="metric-icon" />
             <div>
-              <span className="metric-label">PRICING GUIDELINE</span>
-              <p className="metric-value">Max Discount: 10% / Min Margin: 20%</p>
+              <span className="metric-label">TOOLS USED</span>
+              <p className="metric-value" style={{ textTransform: 'none', fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                {merchantToolsUsed && merchantToolsUsed.length > 0 
+                  ? merchantToolsUsed.join(', ') 
+                  : 'get_inventory, get_product_price, evaluate_margin'}
+              </p>
+            </div>
+          </div>
+          <div className="metric-row">
+            <CheckCircle className="metric-icon" />
+            <div>
+              <span className="metric-label">CONFIDENCE & DECISION</span>
+              <p className="metric-value">
+                {((merchantConfidence ?? 1.0) * 100).toFixed(0)}% Confidence | {isApproved ? 'AGREED' : isBlocked ? 'FAILED' : 'ACTIVE'}
+              </p>
             </div>
           </div>
         </div>

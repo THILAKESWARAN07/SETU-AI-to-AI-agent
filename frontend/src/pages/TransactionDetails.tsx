@@ -8,7 +8,8 @@ import {
   ShieldAlert,
   DollarSign,
   Info,
-  CreditCard
+  CreditCard,
+  Package
 } from 'lucide-react';
 import { apiService, ApiError } from '../services/api';
 import type { Transaction, AuditEvent } from '../types';
@@ -315,6 +316,24 @@ export default function TransactionDetails() {
                 </div>
               </div>
             </div>
+            
+            <button 
+              onClick={() => navigate(`/trust?transaction_id=${transaction.id}`)}
+              className="btn btn-primary btn-glow details-trust-btn font-mono"
+              style={{ width: '100%', marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+            >
+              <ShieldCheck className="btn-icon" />
+              <span>View Trust Analysis</span>
+            </button>
+
+            <button 
+              onClick={() => navigate(`/orders/${transaction.id}`)}
+              className="btn btn-secondary details-trust-btn font-mono"
+              style={{ width: '100%', marginTop: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+            >
+              <Package className="btn-icon" />
+              <span>View Order & Fulfillment</span>
+            </button>
           </div>
         </div>
       </div>

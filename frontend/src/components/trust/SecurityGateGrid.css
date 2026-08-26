@@ -1,0 +1,106 @@
+.security-gate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 24px;
+}
+
+.gate-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: all var(--transition-normal);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+}
+
+.gate-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-color-hover);
+}
+
+.gate-card-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.icon-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gate-card-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--secondary);
+}
+
+.gate-name {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-main);
+}
+
+.gate-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+
+.gate-badge.passed {
+  background-color: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.2);
+  color: var(--accent-green);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.1);
+}
+
+.gate-badge.configured {
+  background-color: rgba(0, 230, 255, 0.08);
+  border-color: rgba(0, 230, 255, 0.2);
+  color: var(--secondary);
+}
+
+.gate-badge.failed {
+  background-color: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.2);
+  color: var(--accent-red);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.1);
+}
+
+.gate-desc {
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.gate-divider {
+  height: 1px;
+  background-color: var(--border-color);
+}
+
+.gate-evidence-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.65rem;
+}
+
+.evidence-lbl {
+  letter-spacing: 0.05em;
+}
+
+.evidence-val {
+  word-break: break-all;
+  background-color: var(--bg-main);
+  padding: 8px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  line-height: 1.4;
+}

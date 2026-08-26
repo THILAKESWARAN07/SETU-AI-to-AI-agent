@@ -117,6 +117,16 @@ export default function Payment() {
     };
   }, [transaction, localStatus]);
 
+  // 3. Auto-redirect to order details on payment success
+  useEffect(() => {
+    if (transaction && localStatus === 'SUCCESS') {
+      const timer = setTimeout(() => {
+        navigate(`/orders/${transaction.id}`);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [transaction, localStatus, navigate]);
+
   const handleBack = () => {
     if (transaction && localStatus === 'PENDING') {
       const confirmLeave = window.confirm(

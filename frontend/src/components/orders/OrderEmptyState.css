@@ -1,0 +1,52 @@
+.order-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 32px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  text-align: center;
+  margin: 24px 0;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.order-empty-state .empty-icon-glow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  background: rgba(0, 230, 255, 0.05);
+  border: 1px solid var(--secondary-glow);
+  border-radius: 50%;
+  margin-bottom: 24px;
+  box-shadow: 0 0 20px var(--secondary-glow);
+}
+
+.order-empty-state .empty-icon {
+  width: 36px;
+  height: 36px;
+}
+
+.order-empty-state h3 {
+  font-size: 1.25rem;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+  color: var(--text-main);
+}
+
+.order-empty-state p {
+  max-width: 480px;
+  font-size: 0.9rem;
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+
+.order-empty-state .btn-glow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

@@ -380,3 +380,182 @@ request_purchase_schema = {
         "required": ["buyer_id", "product_id", "quantity", "proposed_price", "reason"]
     }
 }
+
+
+def get_policy_constraints_tool(db: Session) -> Dict[str, Any]:
+    policy = db.query(MerchantPolicy).filter(MerchantPolicy.active == True).first()
+    if not policy:
+        return {"error": "No active policy configuration found."}
+    return {
+        "max_discount_percent": str(policy.max_discount_percent),
+        "max_auto_order_amount": str(policy.max_auto_order_amount),
+        "require_approval_above": str(policy.require_approval_above),
+        "policy_version": policy.policy_version
+    }
+
+get_policy_constraints_schema = {
+    "name": "get_policy_constraints",
+    "description": "Retrieves active merchant policy thresholds (discount caps and approval ceilings) governing orders.",
+    "parameters": {
+        "type": "object",
+        "properties": {}
+    }
+}
+
+get_product_details_schema = {
+    "name": "get_product_details",
+    "description": "Retrieves detailed information about a specific product in the catalog by its ID.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "product_id": {"type": "integer", "description": "The unique product key"}
+        },
+        "required": ["product_id"]
+    }
+}
+
+
+def evaluate_budget_tool(db: Session, proposed_price: Optional[str] = None, budget: Optional[str] = None) -> Dict[str, Any]:
+    if not proposed_price or not budget:
+        return {"error": "Missing required arguments: both 'proposed_price' and 'budget' must be provided."}
+    try:
+        p_price = Decimal(proposed_price)
+        p_budget = Decimal(budget)
+    except Exception as e:
+        return {"error": f"Invalid format for proposed_price or budget: {e}"}
+    allowed = p_price <= p_budget
+    return {
+        "proposed_price": str(p_price),
+        "budget": str(p_budget),
+        "within_budget": allowed,
+        "amount_over_budget": str(p_price - p_budget) if not allowed else "0.00"
+    }
+
+evaluate_budget_schema = {
+    "name": "evaluate_budget",
+    "description": "Compares proposed price quote against maximum procurement budget boundary.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "proposed_price": {"type": "string", "description": "Decimal string representing the offered deal amount"},
+            "budget": {"type": "string", "description": "Decimal string representing the maximum allowed budget limit"}
+        },
+        "required": ["proposed_price", "budget"]
+    }
+}
+
+
+def get_inventory_tool(db: Session, product_id: int) -> Dict[str, Any]:
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        return {"error": f"Product with ID {product_id} not found."}
+    return {
+        "product_id": product_id,
+        "name": p.name,
+        "inventory": p.inventory,
+        "in_stock": p.inventory > 0
+    }
+
+get_inventory_schema = {
+    "name": "get_inventory",
+    "description": "Checks available warehouse stock quantity for a single catalog item.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "product_id": {"type": "integer", "description": "The unique product key"}
+        },
+        "required": ["product_id"]
+    }
+}
+
+
+def get_product_price_tool(db: Session, product_id: int) -> Dict[str, Any]:
+    p = db.query(Product).filter(Product.id == product_id).first()
+    if not p:
+        return {"error": f"Product with ID {product_id} not found."}
+    return {
+        "product_id": product_id,
+        "name": p.name,
+        "price": str(p.price)
+    }
+
+get_product_price_schema = {
+    "name": "get_product_price",
+    "description": "Retrieves base price quote for a single catalog item.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "product_id": {"type": "integer", "description": "The unique product key"}
+        },
+        "required": ["product_id"]
+    }
+}
+
+
+def get_merchant_constraints_tool(db: Session) -> Dict[str, Any]:
+    policy = db.query(MerchantPolicy).filter(MerchantPolicy.active == True).first()
+    if not policy:
+        return {"error": "No active policy configuration found."}
+    return {
+        "min_margin_percent": str(policy.min_margin_percent),
+        "max_discount_percent": str(policy.max_discount_percent),
+        "policy_version": policy.policy_version
+    }
+
+get_merchant_constraints_schema = {
+    "name": "get_merchant_constraints",
+    "description": "Retrieves vendor guidelines (minimum profit margin and discount bounds) required for deal approval.",
+    "parameters": {
+        "type": "object",
+        "properties": {}
+    }
+}
+
+
+def evaluate_margin_tool(db: Session, product_id: Optional[int] = None, quantity: Optional[int] = None, proposed_price: Optional[str] = None) -> Dict[str, Any]:
+    if product_id is None or quantity is None or not proposed_price:
+        return {"error": "Missing required arguments: 'product_id', 'quantity', and 'proposed_price' must all be provided."}
+    try:
+        pid = int(product_id)
+        qty = int(quantity)
+        final_price = Decimal(proposed_price)
+    except Exception as e:
+        return {"error": f"Invalid format for product_id, quantity, or proposed_price: {e}"}
+
+    p = db.query(Product).filter(Product.id == pid).first()
+    policy = db.query(MerchantPolicy).filter(MerchantPolicy.active == True).first()
+    if not p or not policy:
+        return {"error": "Product or active policy config missing."}
+    
+    cost = p.cost * Decimal(qty)
+    margin_amount = final_price - cost
+    
+    if final_price > Decimal("0"):
+        margin_percent = (margin_amount / final_price) * Decimal("100")
+    else:
+        margin_percent = Decimal("-100.00")
+        
+    allowed = margin_percent >= policy.min_margin_percent
+    return {
+        "product_id": product_id,
+        "quantity": quantity,
+        "cost_total": str(cost),
+        "proposed_price": str(final_price),
+        "calculated_margin_percent": str(margin_percent.quantize(Decimal("0.01"))),
+        "minimum_margin_percent": str(policy.min_margin_percent),
+        "margin_passed": allowed
+    }
+
+evaluate_margin_schema = {
+    "name": "evaluate_margin",
+    "description": "Verifies if the proposed transaction price complies with the merchant's required minimum profit margin guidelines.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "product_id": {"type": "integer", "description": "Product ID being sold"},
+            "quantity": {"type": "integer", "description": "Units count"},
+            "proposed_price": {"type": "string", "description": "Offered deal total amount decimal string"}
+        },
+        "required": ["product_id", "quantity", "proposed_price"]
+    }
+}

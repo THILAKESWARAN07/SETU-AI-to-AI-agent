@@ -1,0 +1,65 @@
+.order-summary-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-bottom: 24px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.summary-card-header {
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-color);
+  padding: 16px 24px;
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+  color: var(--text-dimmed);
+  font-weight: 600;
+}
+
+.summary-card-body {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.summary-lbl {
+  color: var(--text-muted);
+}
+
+.summary-val {
+  text-align: right;
+}
+
+.summary-divider {
+  height: 1px;
+  background-color: var(--border-color);
+  margin: 8px 0;
+}
+
+.status-text-success {
+  color: var(--accent-green);
+  font-weight: 700;
+}
+
+.status-text-pending {
+  color: var(--accent-orange);
+  font-weight: 700;
+}
+
+.status-text-failed {
+  color: var(--accent-red);
+  font-weight: 700;
+}
+
+.text-lg {
+  font-size: 1.15rem;
+}

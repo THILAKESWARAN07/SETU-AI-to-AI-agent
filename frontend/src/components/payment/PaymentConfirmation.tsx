@@ -1,4 +1,4 @@
-import { CheckCircle, ArrowLeft, Eye, History } from 'lucide-react';
+import { CheckCircle, ArrowLeft, Eye, History, Package } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { DemoCommerceResponse, Transaction } from '../../types';
 import TransactionSummary from './TransactionSummary';
@@ -95,8 +95,16 @@ export default function PaymentConfirmation({
 
           <div className="action-buttons-wrapper">
             <button 
-              onClick={() => navigate(`/transactions/${transaction.id}`)} 
+              onClick={() => navigate(`/orders/${transaction.id}`)} 
               className="btn btn-primary btn-glow dashboard-action-btn font-mono"
+            >
+              <Package className="btn-icon" />
+              <span>Track Order & Fulfillment</span>
+            </button>
+
+            <button 
+              onClick={() => navigate(`/transactions/${transaction.id}`)} 
+              className="btn btn-secondary dashboard-action-btn font-mono"
             >
               <Eye className="btn-icon" />
               <span>Inspect Security Details</span>
@@ -124,3 +132,4 @@ export default function PaymentConfirmation({
     </div>
   );
 }
+

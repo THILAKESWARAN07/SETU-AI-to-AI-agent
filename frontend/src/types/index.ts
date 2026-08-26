@@ -101,6 +101,15 @@ export interface DemoCommerceResponse {
   discount_percent: string;
   margin_percent: string;
   policy_version: string;
+  
+  // Step 10 dynamic params
+  agent_mode?: string;
+  buyer_objective?: string;
+  buyer_tools_used?: string[];
+  buyer_confidence?: number;
+  merchant_objective?: string;
+  merchant_tools_used?: string[];
+  merchant_confidence?: number;
 }
 
 export interface AttackTestRequest {
@@ -157,3 +166,57 @@ export interface PolicyEvaluationResult {
   discount_percent: string;
 }
 
+export interface SecurityGate {
+  id: string;
+  name: string;
+  description: string;
+  status: 'PASSED' | 'CONFIGURED' | 'FAILED' | 'UNAVAILABLE';
+  evidence: string;
+  iconName: string;
+}
+
+export type OrderStatus = 
+  | 'CREATED' 
+  | 'PAYMENT_PENDING' 
+  | 'PAID' 
+  | 'PROCESSING' 
+  | 'SHIPPED' 
+  | 'DELIVERED' 
+  | 'FAILED' 
+  | 'CANCELLED';
+
+export interface OrderItem {
+  productId: number;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  originalAmount: number;
+  finalAmount: number;
+  merchantName: string;
+}
+
+export interface FulfillmentEvent {
+  id: string;
+  status: OrderStatus;
+  timestamp: string;
+  description: string;
+  completed: boolean;
+}
+
+export interface Order {
+  id: number;
+  transactionId: number;
+  purchaseRequestId: number;
+  razorpayOrderId: string | null;
+  razorpayPaymentId: string | null;
+  amount: number;
+  currency: string;
+  status: OrderStatus;
+  paymentStatus: 'PENDING' | 'SUCCESS' | 'FAILED';
+  createdAt: string;
+  updatedAt: string;
+  items: OrderItem[];
+  merchantName: string;
+  fulfillmentStatus: OrderStatus;
+  timeline: FulfillmentEvent[];
+}

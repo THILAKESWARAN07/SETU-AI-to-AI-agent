@@ -3,13 +3,15 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 
-from backend.app.agents.provider import LLMProvider, MerchantOffer, Negotiation, get_provider
+from backend.app.agents.provider import LLMProvider, MerchantOffer, Negotiation, MerchantDecision, get_provider
 from backend.app.agents.tools import (
     ToolRegistry, search_catalog_tool, search_catalog_schema,
-    view_product_tool, view_product_schema,
-    identify_related_product_tool, identify_related_product_schema,
-    propose_cross_sell_tool, propose_cross_sell_schema,
-    create_bundle_offer_tool, create_bundle_offer_schema
+    view_product_tool, get_product_details_schema,
+    get_inventory_tool, get_inventory_schema,
+    get_product_price_tool, get_product_price_schema,
+    get_merchant_constraints_tool, get_merchant_constraints_schema,
+    evaluate_margin_tool, evaluate_margin_schema,
+    identify_related_product_tool, propose_cross_sell_tool, create_bundle_offer_tool
 )
 
 class MerchantAgent:
@@ -32,11 +34,15 @@ class MerchantAgent:
             
         self.provider = provider or get_provider()
         self.registry = ToolRegistry()
-        self.registry.register_tool("search_catalog", search_catalog_tool, search_catalog_schema)
-        self.registry.register_tool("view_product", view_product_tool, view_product_schema)
-        self.registry.register_tool("identify_related_product", identify_related_product_tool, identify_related_product_schema)
-        self.registry.register_tool("propose_cross_sell", propose_cross_sell_tool, propose_cross_sell_schema)
-        self.registry.register_tool("create_bundle_offer", create_bundle_offer_tool, create_bundle_offer_schema)
+        self.registry.register_tool("get_inventory", get_inventory_tool, get_inventory_schema)
+        self.registry.register_tool("get_product_price", get_product_price_tool, get_product_price_schema)
+        self.registry.register_tool("get_merchant_constraints", get_merchant_constraints_tool, get_merchant_constraints_schema)
+        self.registry.register_tool("evaluate_margin", evaluate_margin_tool, evaluate_margin_schema)
+
+        # Session trace variables
+        self.last_confidence: float = 1.0
+        self.last_reasoning: str = ""
+        self.tools_called_in_session: List[str] = []
 
     def process_message(self, db: Session, message: str) -> Dict[str, Any]:
         tools_definition = self.registry.get_tool_definitions()
@@ -89,3 +95,10 @@ class MerchantAgent:
         
     def negotiate(self, db: Session, prompt: str) -> Negotiation:
         return self.provider.generate_structured_response(prompt, self.system_instruction, Negotiation)
+
+    def negotiate_decision(self, db: Session, prompt: str, memory: Optional[Any] = None) -> MerchantDecision:
+        if memory is None:
+            from backend.app.agents.memory import NegotiationMemory
+            memory = NegotiationMemory(session_id="dummy_session_merchant", product_id=1)
+        from backend.app.agents.runtime import execute_agent_loop
+        return execute_agent_loop(db, self, self.provider, memory, prompt, MerchantDecision)

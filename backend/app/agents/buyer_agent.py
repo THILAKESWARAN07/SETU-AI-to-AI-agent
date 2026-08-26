@@ -3,11 +3,12 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 
-from backend.app.agents.provider import LLMProvider, PurchaseRequestProposal, Negotiation, get_provider
+from backend.app.agents.provider import LLMProvider, PurchaseRequestProposal, Negotiation, BuyerDecision, get_provider
 from backend.app.agents.tools import (
     ToolRegistry, search_catalog_tool, search_catalog_schema,
-    view_product_tool, view_product_schema,
-    compare_products_tool, compare_products_schema,
+    view_product_tool, get_product_details_schema,
+    get_policy_constraints_tool, get_policy_constraints_schema,
+    evaluate_budget_tool, evaluate_budget_schema,
     request_purchase_tool, request_purchase_schema
 )
 
@@ -32,12 +33,14 @@ class BuyerAgent:
         self.provider = provider or get_provider()
         self.registry = ToolRegistry()
         self.registry.register_tool("search_catalog", search_catalog_tool, search_catalog_schema)
-        # Register list_products tool name for backward compatibility with old code!
-        self.registry.register_tool("list_products", search_catalog_tool, search_catalog_schema)
-        self.registry.register_tool("view_product", view_product_tool, view_product_schema)
-        self.registry.register_tool("get_product", view_product_tool, view_product_schema)
-        self.registry.register_tool("compare_products", compare_products_tool, compare_products_schema)
-        self.registry.register_tool("request_purchase", request_purchase_tool, request_purchase_schema)
+        self.registry.register_tool("get_product_details", view_product_tool, get_product_details_schema)
+        self.registry.register_tool("get_policy_constraints", get_policy_constraints_tool, get_policy_constraints_schema)
+        self.registry.register_tool("evaluate_budget", evaluate_budget_tool, evaluate_budget_schema)
+        
+        # Session trace variables
+        self.last_confidence: float = 1.0
+        self.last_reasoning: str = ""
+        self.tools_called_in_session: List[str] = []
 
     def process_message(self, db: Session, message: str) -> Dict[str, Any]:
         tools_definition = self.registry.get_tool_definitions()
@@ -51,7 +54,10 @@ class BuyerAgent:
             t_name = call.get("name")
             t_args = call.get("args", {})
             try:
-                result = self.registry.execute_tool(t_name, db, **t_args)
+                if t_name == "request_purchase":
+                    result = request_purchase_tool(db, **t_args)
+                else:
+                    result = self.registry.execute_tool(t_name, db, **t_args)
                 executed_tool_results.append({
                     "tool_name": t_name,
                     "args": t_args,
@@ -89,6 +95,13 @@ class BuyerAgent:
         
     def negotiate(self, db: Session, prompt: str) -> Negotiation:
         return self.provider.generate_structured_response(prompt, self.system_instruction, Negotiation)
+
+    def negotiate_decision(self, db: Session, prompt: str, memory: Optional[Any] = None) -> BuyerDecision:
+        if memory is None:
+            from backend.app.agents.memory import NegotiationMemory
+            memory = NegotiationMemory(session_id="dummy_session_buyer", product_id=1)
+        from backend.app.agents.runtime import execute_agent_loop
+        return execute_agent_loop(db, self, self.provider, memory, prompt, BuyerDecision)
         
     def request_purchase(self, db: Session, buyer_id: str, product_id: int, quantity: int, proposed_price: str, reason: str) -> Dict[str, Any]:
         return request_purchase_tool(db, buyer_id=buyer_id, product_id=product_id, quantity=quantity, proposed_price=proposed_price, reason=reason)

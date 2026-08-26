@@ -21,6 +21,9 @@ export default function NegotiationTimeline({
   return (
     <div className="timeline-section-card animate-fade-in">
       <h3 className="timeline-section-title">Live Transaction Log</h3>
+      <p className="timeline-subtitle text-muted" style={{ fontSize: '0.75rem', marginTop: '4px', marginBottom: '16px' }}>
+        AI-to-AI autonomous negotiation session log. (Catalog base value: ₹{parseFloat(originalAmount).toLocaleString('en-IN')})
+      </p>
 
       <div className="chat-timeline-container">
         {history.map((turn, i) => {
@@ -37,20 +40,19 @@ export default function NegotiationTimeline({
             </div>
           );
 
-          let messageText = '';
+          let messageText = turn.reason || 'Negotiation step evaluated.';
           let subText = '';
+          let tools: string[] = [];
+          let confidence: number | undefined;
 
-          if (round === 1) {
-            messageText = `Requesting bundle catalog package matching earbuds query. Initial purchase boundary formulated: Bid ₹1,800.00.`;
-            subText = turn.buyer_offer?.reason || '';
-          } else if (round === 2) {
-            messageText = `Standard retail aggregate price is ₹${parseFloat(originalAmount).toLocaleString('en-IN')}. Evaluating discount margins. Counter-offer submitted: Bundle price ₹${parseFloat(finalAmount).toLocaleString('en-IN')} (approx ${discountPercent}% discount).`;
-            subText = turn.merchant_offer?.reason || '';
-          } else if (round === 3) {
-            messageText = `Evaluated counter-offer of ₹${parseFloat(finalAmount).toLocaleString('en-IN')} against active policy bounds. Offer accepted. Seal transaction request.`;
-            subText = turn.buyer_offer?.reason || '';
-          } else {
-            messageText = turn.reason || 'Negotiation step evaluated.';
+          if (turn.buyer_offer) {
+            subText = `Proposed Bid: ₹${parseFloat(turn.buyer_offer.final_amount).toLocaleString('en-IN')} | Rationale: "${turn.buyer_offer.reason}"`;
+            tools = turn.buyer_offer.tools_used || [];
+            confidence = turn.buyer_offer.confidence;
+          } else if (turn.merchant_offer) {
+            subText = `Proposed Counter: ₹${parseFloat(turn.merchant_offer.offered_amount).toLocaleString('en-IN')} | Rationale: "${turn.merchant_offer.reason}"`;
+            tools = turn.merchant_offer.tools_used || [];
+            confidence = turn.merchant_offer.confidence;
           }
 
           return (
@@ -65,6 +67,42 @@ export default function NegotiationTimeline({
                 </div>
                 <p className="bubble-msg">{messageText}</p>
                 {subText && <p className="bubble-subtext">Action log: "{subText}"</p>}
+                
+                {/* Tools & Confidence Indicators */}
+                {(confidence !== undefined || (tools && tools.length > 0)) && (
+                  <div className="bubble-footer-metrics" style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '6px',
+                    marginTop: '8px',
+                    paddingTop: '6px',
+                    borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+                    fontSize: '0.68rem',
+                    color: 'rgba(255, 255, 255, 0.5)'
+                  }}>
+                    {confidence !== undefined && (
+                      <span style={{
+                        padding: '1px 5px',
+                        background: 'rgba(255, 255, 255, 0.06)',
+                        borderRadius: '3px',
+                        fontWeight: 500
+                      }}>
+                        Confidence: {(confidence * 100).toFixed(0)}%
+                      </span>
+                    )}
+                    {tools && tools.length > 0 && (
+                      <span style={{
+                        padding: '1px 5px',
+                        background: 'rgba(255, 255, 255, 0.06)',
+                        borderRadius: '3px',
+                        fontStyle: 'italic',
+                        color: 'rgba(255, 255, 255, 0.6)'
+                      }}>
+                        Tools: {tools.join(', ')}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           );

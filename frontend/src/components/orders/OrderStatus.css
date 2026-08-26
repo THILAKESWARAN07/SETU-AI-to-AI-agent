@@ -1,0 +1,60 @@
+.order-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border: 1px solid transparent;
+}
+
+.order-status-badge .status-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* Status Classes mapping to color systems */
+.status-created, .status-pending {
+  background-color: rgba(255, 147, 0, 0.05);
+  border-color: rgba(255, 147, 0, 0.2);
+  color: var(--accent-orange);
+}
+.status-created .status-badge-dot, .status-pending .status-badge-dot {
+  background-color: var(--accent-orange);
+  box-shadow: 0 0 8px var(--accent-orange);
+}
+
+.status-paid, .status-processing, .status-shipped, .status-delivered {
+  background-color: rgba(46, 204, 113, 0.05);
+  border-color: rgba(46, 204, 113, 0.2);
+  color: var(--accent-green);
+}
+.status-paid .status-badge-dot, 
+.status-processing .status-badge-dot, 
+.status-shipped .status-badge-dot, 
+.status-delivered .status-badge-dot {
+  background-color: var(--accent-green);
+  box-shadow: 0 0 8px var(--accent-green);
+}
+
+.status-failed, .status-cancelled {
+  background-color: rgba(231, 76, 60, 0.05);
+  border-color: rgba(231, 76, 60, 0.2);
+  color: var(--accent-red);
+}
+.status-failed .status-badge-dot, .status-cancelled .status-badge-dot {
+  background-color: var(--accent-red);
+  box-shadow: 0 0 8px var(--accent-red);
+}
+
+.status-unknown {
+  background-color: rgba(127, 140, 141, 0.05);
+  border-color: rgba(127, 140, 141, 0.2);
+  color: var(--text-dimmed);
+}
+.status-unknown .status-badge-dot {
+  background-color: var(--text-dimmed);
+}
