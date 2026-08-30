@@ -42,7 +42,10 @@ app = FastAPI(
 # CORS middleware for potential frontend communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -390,6 +393,97 @@ def create_payment(purchase_request_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/payment/config", response_model=schemas.PaymentConfigSchema)
+def get_payment_config():
+    """
+    Exposes the active payment gateway configuration (mode and public client key).
+    """
+    return {
+        "payment_mode": settings.active_payment_mode,
+        "razorpay_key_id": settings.RAZORPAY_KEY_ID if settings.active_payment_mode == "razorpay" else ""
+    }
+
+
+@app.post("/api/payment/verify", response_model=schemas.TransactionSchema)
+def verify_payment(payload: schemas.PaymentVerifySchema, db: Session = Depends(get_db)):
+    """
+    Cryptographically verifies the Razorpay payment callback signature on the server.
+    Ensures that amounts are locked and transactions are processed idempotently.
+    """
+    tx = db.query(models.Transaction).filter(
+        models.Transaction.razorpay_order_id == payload.razorpay_order_id
+    ).first()
+    
+    if not tx:
+        AuditEngine.log_event(
+            db=db,
+            actor="SYSTEM",
+            action="VERIFY_PAYMENT",
+            result="FAIL",
+            reason=f"No transaction found for Razorpay order ID: {payload.razorpay_order_id}"
+        )
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    if tx.status == "SUCCESS":
+        return tx
+
+    adapter = payments.get_payment_adapter()
+    is_valid = adapter.verify_payment_signature(
+        order_id=payload.razorpay_order_id,
+        payment_id=payload.razorpay_payment_id,
+        signature=payload.razorpay_signature
+    )
+
+    if not is_valid:
+        tx.status = "FAILED"
+        db.commit()
+
+        AuditEngine.log_event(
+            db=db,
+            actor="SYSTEM",
+            action="VERIFY_PAYMENT",
+            result="FAIL",
+            reason="Invalid payment signature callback received.",
+            entity_type="Transaction",
+            entity_id=tx.id,
+            metadata={
+                "razorpay_order_id": payload.razorpay_order_id,
+                "razorpay_payment_id": payload.razorpay_payment_id
+            }
+        )
+        raise HTTPException(status_code=400, detail="Invalid payment signature")
+
+    tx.status = "SUCCESS"
+    tx.razorpay_payment_id = payload.razorpay_payment_id
+    tx.razorpay_signature = payload.razorpay_signature
+
+    pr = db.query(models.PurchaseRequest).filter(
+        models.PurchaseRequest.id == tx.purchase_request_id
+    ).first()
+    if pr:
+        pr.status = "PAID"
+
+    db.commit()
+    db.refresh(tx)
+
+    AuditEngine.log_event(
+        db=db,
+        actor="SYSTEM",
+        action="VERIFY_PAYMENT",
+        result="SUCCESS",
+        reason=f"Payment verified successfully. Razorpay Order ID: {payload.razorpay_order_id}",
+        entity_type="Transaction",
+        entity_id=tx.id,
+        metadata={
+            "razorpay_order_id": payload.razorpay_order_id,
+            "razorpay_payment_id": payload.razorpay_payment_id,
+            "amount": str(tx.amount)
+        }
+    )
+
+    return tx
 
 
 @app.post("/api/webhooks/razorpay")

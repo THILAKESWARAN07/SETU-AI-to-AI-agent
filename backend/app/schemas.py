@@ -93,11 +93,24 @@ class TransactionSchema(BaseModel):
     purchase_request_id: int
     razorpay_order_id: Optional[str] = None
     razorpay_payment_id: Optional[str] = None
+    razorpay_signature: Optional[str] = None
     amount: Decimal
     status: str
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PaymentConfigSchema(BaseModel):
+    payment_mode: str
+    razorpay_key_id: str
+
+
+class PaymentVerifySchema(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
 
 
 # --- AUDIT EVENT SCHEMAS ---
@@ -109,7 +122,12 @@ class AuditEventBase(BaseModel):
     entity_type: Optional[str] = None
     entity_id: Optional[int] = None
     policy_version: Optional[str] = None
-    event_metadata: Dict[str, Any] = Field(default_factory=dict, validation_alias="metadata", serialization_alias="metadata")
+
+    event_metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias="event_metadata",
+        serialization_alias="metadata"
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 

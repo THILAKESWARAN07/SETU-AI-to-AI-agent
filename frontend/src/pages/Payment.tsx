@@ -50,8 +50,103 @@ export default function Payment() {
   const [error, setError] = useState<string | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
   
+  // Payment mode configuration state
+  const [paymentMode, setPaymentMode] = useState<string>('mock');
+  const [razorpayKeyId, setRazorpayKeyId] = useState<string>('');
+  const [isProcessingRazorpay, setIsProcessingRazorpay] = useState(false);
+
   const paymentCalled = useRef(false);
   const pollingTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Load payment gateway settings
+  useEffect(() => {
+    apiService.getPaymentConfig()
+      .then((cfg) => {
+        setPaymentMode(cfg.payment_mode);
+        setRazorpayKeyId(cfg.razorpay_key_id);
+      })
+      .catch((err) => {
+        console.error('Failed to retrieve payment configuration:', err);
+      });
+  }, []);
+
+  // Razorpay Checkout dynamic loader
+  const loadRazorpayScript = (): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if ((window as any).hasOwnProperty('Razorpay')) {
+        resolve(true);
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  };
+
+  const handleRazorpayPayment = async () => {
+    if (!transaction || !razorpayKeyId) return;
+
+    setIsProcessingRazorpay(true);
+    setError(null);
+
+    const loaded = await loadRazorpayScript();
+    if (!loaded) {
+      setError("Failed to load Razorpay checkout widget script. Please check your internet connection.");
+      setIsProcessingRazorpay(false);
+      return;
+    }
+
+    const options = {
+      key: razorpayKeyId,
+      amount: Math.round(Number(transaction.amount) * 100),
+      currency: "INR",
+      name: "SETU AI Commerce",
+      description: `Order checkout for Request #${transaction.purchase_request_id}`,
+      order_id: transaction.razorpay_order_id,
+      prefill: {
+        name: "Test Buyer",
+        email: "buyer@example.com",
+        contact: "9999999999"
+      },
+      theme: {
+        color: "#3b82f6"
+      },
+      handler: async (response: any) => {
+        setIsSecuring(true);
+        try {
+          const updatedTx = await apiService.verifyPayment({
+            razorpay_order_id: response.razorpay_order_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+            razorpay_signature: response.razorpay_signature
+          });
+          setTransaction(updatedTx);
+          setLocalStatus('SUCCESS');
+        } catch (err: any) {
+          setError(err instanceof Error ? err.message : 'Razorpay payment signature verification failed.');
+          setLocalStatus('FAILED');
+        } finally {
+          setIsSecuring(false);
+          setIsProcessingRazorpay(false);
+        }
+      },
+      modal: {
+        ondismiss: () => {
+          setIsProcessingRazorpay(false);
+          console.log("Razorpay Checkout payment widget modal dismissed.");
+        }
+      }
+    };
+
+    try {
+      const rzp = new (window as any).Razorpay(options);
+      rzp.open();
+    } catch (err: any) {
+      setError(`Failed to initialize Razorpay checkout popup: ${err.message || err}`);
+      setIsProcessingRazorpay(false);
+    }
+  };
 
   // 1. Create payment transaction on mount
   useEffect(() => {
@@ -289,9 +384,14 @@ export default function Payment() {
               <p>Locked Transaction Session Gateway</p>
             </div>
 
-            <div className="payment-header-status">
-              <span className="gateway-dot"></span>
-              <span>PAYMENT CHANNEL SECURED</span>
+            <div className="payment-header-status" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', background: 'none', border: 'none', padding: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: 'rgba(34, 197, 94, 0.05)', border: '1px solid rgba(34, 197, 94, 0.15)', padding: '6px 12px', borderRadius: '6px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-green)' }}>
+                <span className="gateway-dot"></span>
+                <span>SECURED</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.7rem', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', padding: '4px 8px', borderRadius: '4px', border: paymentMode === 'razorpay' ? '1px solid rgba(59, 130, 246, 0.3)' : '1px solid rgba(156, 163, 175, 0.3)', backgroundColor: paymentMode === 'razorpay' ? 'rgba(59, 130, 246, 0.05)' : 'rgba(156, 163, 175, 0.05)', color: paymentMode === 'razorpay' ? '#3b82f6' : '#9ca3af' }}>
+                <span>{paymentMode === 'razorpay' ? 'RAZORPAY TEST MODE' : 'OFFLINE MOCK'}</span>
+              </div>
             </div>
           </div>
 
@@ -305,36 +405,78 @@ export default function Payment() {
               {/* Status Step Flow */}
               <TransactionStatus status={localStatus} />
 
-              {/* Gateway Webhook simulator card */}
-              <div className="gateway-simulator-card animate-fade-in">
-                <h3 className="sim-title font-mono">GATEWAY SIMULATOR CONTROLS</h3>
-                <p className="sim-desc text-dimmed">
-                  SETU is currently running in **Test Mode**. Use these controls to simulate webhook callbacks with correct cryptographic signatures over secure channels.
-                </p>
+              {/* Conditional Payment Gateway Controls */}
+              {paymentMode === 'razorpay' ? (
+                /* Razorpay Test Mode Card */
+                <div className="gateway-simulator-card razorpay-test-mode-card animate-fade-in" style={{ borderStyle: 'solid', borderColor: '#3b82f6' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ width: '8px', height: '8px', backgroundColor: '#3b82f6', borderRadius: '50%', boxShadow: '0 0 8px #3b82f6' }} />
+                    <h3 className="sim-title font-mono" style={{ color: '#3b82f6' }}>RAZORPAY TEST MODE ACTIVE</h3>
+                  </div>
+                  <p className="sim-desc text-dimmed">
+                    SETU is currently integrated with **Razorpay Checkout (Test Mode)**. Press checkout below to complete the secure payment flow using Razorpay's checkout widget.
+                  </p>
 
-                <div className="sim-actions">
-                  <button 
-                    onClick={handleSimulateSuccess} 
-                    disabled={isSimulating}
-                    className="btn btn-primary btn-glow sim-btn-success"
-                  >
-                    {isSimulating ? (
-                      <Loader2 className="btn-icon animate-spin" />
-                    ) : (
-                      <Play className="btn-icon" />
-                    )}
-                    <span>Simulate Payment Success</span>
-                  </button>
-                  <button 
-                    onClick={handleSimulateFailure}
-                    disabled={isSimulating}
-                    className="btn btn-secondary sim-btn-failed"
-                  >
-                    <AlertTriangle className="btn-icon" />
-                    <span>Simulate Payment Failure</span>
-                  </button>
+                  <div className="sim-actions" style={{ flexDirection: 'column', gap: '12px' }}>
+                    <button 
+                      onClick={handleRazorpayPayment} 
+                      disabled={isProcessingRazorpay}
+                      className="btn btn-primary btn-glow razorpay-pay-btn"
+                      style={{ width: '100%', padding: '14px', fontSize: '1rem', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px' }}
+                    >
+                      {isProcessingRazorpay ? (
+                        <Loader2 className="btn-icon animate-spin" />
+                      ) : (
+                        <Lock className="btn-icon" />
+                      )}
+                      <span>Pay with Razorpay Test Mode</span>
+                    </button>
+                    
+                    <button 
+                      onClick={handleSimulateFailure}
+                      className="btn btn-secondary sim-btn-failed"
+                      style={{ width: '100%', padding: '12px' }}
+                    >
+                      <AlertTriangle className="btn-icon" />
+                      <span>Cancel Checkout Session</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                /* Gateway Webhook simulator card */
+                <div className="gateway-simulator-card animate-fade-in">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ width: '8px', height: '8px', backgroundColor: 'var(--accent-orange)', borderRadius: '50%', boxShadow: '0 0 8px var(--accent-orange)' }} />
+                    <h3 className="sim-title font-mono">OFFLINE MOCK MODE ACTIVE</h3>
+                  </div>
+                  <p className="sim-desc text-dimmed">
+                    SETU is currently running in **Offline Mock Mode**. Use these controls to simulate webhook callbacks with correct cryptographic signatures over secure channels.
+                  </p>
+
+                  <div className="sim-actions">
+                    <button 
+                      onClick={handleSimulateSuccess} 
+                      disabled={isSimulating}
+                      className="btn btn-primary btn-glow sim-btn-success"
+                    >
+                      {isSimulating ? (
+                        <Loader2 className="btn-icon animate-spin" />
+                      ) : (
+                        <Play className="btn-icon" />
+                      )}
+                      <span>Simulate Payment Success</span>
+                    </button>
+                    <button 
+                      onClick={handleSimulateFailure}
+                      disabled={isSimulating}
+                      className="btn btn-secondary sim-btn-failed"
+                    >
+                      <AlertTriangle className="btn-icon" />
+                      <span>Simulate Payment Failure</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Right Column: Order lock Details & security checkpoints */}

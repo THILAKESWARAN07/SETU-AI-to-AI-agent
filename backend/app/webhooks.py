@@ -159,6 +159,7 @@ class WebhookProcessor:
 
         transaction.status = "SUCCESS"
         transaction.razorpay_payment_id = payment_id
+        transaction.razorpay_signature = signature
         
         # Mark associated purchase request as PAID
         purchase_request = db.query(PurchaseRequest).filter(

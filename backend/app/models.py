@@ -93,6 +93,7 @@ class Transaction(Base):
     )
     razorpay_order_id = Column(String, nullable=True, unique=True, index=True)
     razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
+    razorpay_signature = Column(String, nullable=True, unique=True, index=True)
     amount = Column(Numeric(10, 2, asdecimal=True), nullable=False)
     status = Column(String, default="PENDING", nullable=False)  # PENDING, SUCCESS, FAILED
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)

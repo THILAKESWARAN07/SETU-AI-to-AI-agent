@@ -177,6 +177,22 @@ export const apiService = {
     });
   },
 
+  async getPaymentConfig(): Promise<{ payment_mode: string; razorpay_key_id: string }> {
+    return fetchJson<{ payment_mode: string; razorpay_key_id: string }>('/api/payment/config');
+  },
+
+  async verifyPayment(data: {
+    razorpay_order_id: string;
+    razorpay_payment_id: string;
+    razorpay_signature: string;
+  }): Promise<Transaction> {
+    return fetchJson<Transaction>('/api/payment/verify', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+
   // --- AUDIT & UTILITY ENDPOINTS ---
   async getAuditTrail(): Promise<AuditEvent[]> {
     return fetchJson<AuditEvent[]>('/api/audit');

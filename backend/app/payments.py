@@ -108,7 +108,6 @@ class RazorpayAdapter(PaymentGatewayAdapter):
             mock = MockRazorpayAdapter(self._key_secret, self._webhook_secret)
             return mock.create_order(amount, receipt_id)
             
-        url = f"{self.base_url}/orders"
         data = {
             "amount": amount_paise,
             "currency": "INR",
@@ -118,12 +117,13 @@ class RazorpayAdapter(PaymentGatewayAdapter):
         logger.info(f"[RAZORPAY PAY] Requesting order from Razorpay: receipt={receipt_id}")
         
         try:
-            with httpx.Client(auth=(self._key_id, self._key_secret)) as client:
-                response = client.post(url, json=data)
-                response.raise_for_status()
-                return response.json()
+            import razorpay
+            client = razorpay.Client(auth=(self._key_id, self._key_secret))
+            # Use SDK to create order
+            order = client.order.create(data=data)
+            return order
         except Exception as e:
-            logger.error(f"Razorpay API call failed: {e}")
+            logger.error(f"Razorpay API call failed during SDK call: {e}")
             raise RuntimeError(f"Razorpay communication error: {e}")
 
     def verify_payment_signature(
@@ -152,7 +152,7 @@ def get_payment_adapter() -> PaymentGatewayAdapter:
     """
     Dependency injection helper to return the payment adapter configured with server-side secrets.
     """
-    if settings.IS_PAYMENT_TEST_MODE:
+    if settings.active_payment_mode == "mock":
         return MockRazorpayAdapter(settings.RAZORPAY_KEY_SECRET, settings.RAZORPAY_WEBHOOK_SECRET)
     else:
         return RazorpayAdapter(
@@ -160,6 +160,7 @@ def get_payment_adapter() -> PaymentGatewayAdapter:
             settings.RAZORPAY_KEY_SECRET,
             settings.RAZORPAY_WEBHOOK_SECRET
         )
+
 
 
 import threading
