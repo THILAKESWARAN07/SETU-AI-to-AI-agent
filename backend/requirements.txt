@@ -8,4 +8,5 @@ python-dotenv>=1.0.1
 pyjwt>=2.8.0
 cryptography>=42.0.5
 razorpay>=1.4.1
+google-generativeai
 
