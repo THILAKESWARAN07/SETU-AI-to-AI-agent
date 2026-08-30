@@ -38,6 +38,9 @@ async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T>
       ...options,
       headers: {
         'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
         ...(options?.headers || {}),
       },
     });
@@ -199,7 +202,7 @@ export const apiService = {
   },
 
   async getTransactions(): Promise<Transaction[]> {
-    return fetchJson<Transaction[]>('/api/transactions');
+    return fetchJson<Transaction[]>(`/api/transactions?t=${Date.now()}`);
   },
 
   // --- E2E DEMO ORCHESTRATION ---

@@ -285,6 +285,7 @@ def process_payment_creation(db: Session, purchase_request_id: int) -> Transacti
             raise RuntimeError(f"Payment Gateway order creation failed: {e}")
 
         # 9. Create Transaction
+        logger.info(f"Creating new Transaction record in database: purchase_request_id={pr.id}, order_id={order_data['id']}, amount={pr.final_amount}")
         tx = Transaction(
             purchase_request_id=pr.id,
             razorpay_order_id=order_data["id"],
@@ -294,6 +295,7 @@ def process_payment_creation(db: Session, purchase_request_id: int) -> Transacti
         db.add(tx)
         db.commit()
         db.refresh(tx)
+        logger.info(f"Successfully saved and committed Transaction ID {tx.id} for order {tx.razorpay_order_id}")
 
         # 10. Log successful generation to audit trail
         AuditEngine.log_event(

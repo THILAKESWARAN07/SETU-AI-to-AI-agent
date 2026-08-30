@@ -1,3 +1,7 @@
+import os
+os.environ["LLM_PROVIDER"] = "mock"
+os.environ["PAYMENT_MODE"] = "mock"
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

@@ -157,6 +157,7 @@ class WebhookProcessor:
             )
             return {"status": "success", "message": "Transaction already processed."}
 
+        logger.info(f"Webhook matched order {order_id}. Updating Transaction ID {transaction.id} to SUCCESS. Razorpay Payment ID: {payment_id}")
         transaction.status = "SUCCESS"
         transaction.razorpay_payment_id = payment_id
         transaction.razorpay_signature = signature

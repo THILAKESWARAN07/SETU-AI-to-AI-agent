@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Package, Loader2, AlertTriangle, ArrowLeft, Search, Eye, ExternalLink } from 'lucide-react';
 import { apiService, ApiError } from '../services/api';
 import type { Product, Order, OrderStatus } from '../types';
+import { formatDate } from '../utils/date';
 import OrderEmptyState from '../components/orders/OrderEmptyState';
 import OrderStatusComponent from '../components/orders/OrderStatus';
 import './Orders.css';
@@ -169,15 +170,7 @@ export default function Orders() {
     }).format(val);
   };
 
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
+
 
   const filteredOrders = orders.filter((order) => {
     // Status Filter

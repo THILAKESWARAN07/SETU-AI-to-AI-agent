@@ -37,7 +37,13 @@ export default function TrustActivity({
     .slice(0, selectedTxId === null ? 15 : 50);
 
   const formatTimestamp = (tsStr: string) => {
-    return new Date(tsStr).toLocaleTimeString('en-IN', {
+    let formattedStr = tsStr;
+    if (formattedStr && !formattedStr.includes('Z') && !formattedStr.includes('+') && !formattedStr.match(/-\d{2}:\d{2}$/)) {
+      formattedStr = formattedStr + 'Z';
+    }
+    const d = new Date(formattedStr);
+    return d.toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit'
@@ -45,7 +51,13 @@ export default function TrustActivity({
   };
 
   const formatDate = (tsStr: string) => {
-    return new Date(tsStr).toLocaleDateString('en-IN', {
+    let formattedStr = tsStr;
+    if (formattedStr && !formattedStr.includes('Z') && !formattedStr.includes('+') && !formattedStr.match(/-\d{2}:\d{2}$/)) {
+      formattedStr = formattedStr + 'Z';
+    }
+    const d = new Date(formattedStr);
+    return d.toLocaleDateString('en-IN', {
+      timeZone: 'Asia/Kolkata',
       day: '2-digit',
       month: 'short'
     });

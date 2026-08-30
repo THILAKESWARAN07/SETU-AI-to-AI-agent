@@ -1,7 +1,12 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 from typing import List, Dict, Any, Optional
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone
+
+def serialize_datetime(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
 
 # --- PRODUCT SCHEMAS ---
 class ProductBase(BaseModel):
@@ -62,6 +67,10 @@ class PurchaseRequestSchema(PurchaseRequestBase):
     status: str
     created_at: datetime
 
+    @field_serializer('created_at')
+    def serialize_created_at(self, dt: datetime, _info):
+        return serialize_datetime(dt)
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -86,6 +95,10 @@ class PolicyDecisionSchema(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    @field_serializer('created_at')
+    def serialize_created_at(self, dt: datetime, _info):
+        return serialize_datetime(dt)
+
 
 # --- TRANSACTION SCHEMAS ---
 class TransactionSchema(BaseModel):
@@ -99,6 +112,10 @@ class TransactionSchema(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_serializer('created_at')
+    def serialize_created_at(self, dt: datetime, _info):
+        return serialize_datetime(dt)
 
 
 class PaymentConfigSchema(BaseModel):
@@ -139,6 +156,10 @@ class AuditEventSchema(AuditEventBase):
     timestamp: datetime
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @field_serializer('timestamp')
+    def serialize_timestamp(self, dt: datetime, _info):
+        return serialize_datetime(dt)
 
 
 # --- AGENT AND NEGOTIATION SCHEMAS ---

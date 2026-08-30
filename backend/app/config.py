@@ -43,6 +43,15 @@ class Settings:
     def __init__(self):
         # Refresh instance attributes from loaded/modified environment variables
         self.DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./setu.db")
+        
+        # If it's a relative SQLite database URL, resolve it to an absolute path
+        # to ensure the same database is read/written regardless of current working directory
+        if self.DATABASE_URL.startswith("sqlite:///."):
+            project_root = Path(__file__).resolve().parent.parent.parent
+            db_name = self.DATABASE_URL.split("/.")[-1].lstrip("/")
+            absolute_db_path = project_root / db_name
+            self.DATABASE_URL = f"sqlite:///{absolute_db_path.as_posix()}"
+
         self.RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "rzp_test_mockkeyid123")
         self.RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "mocksecret123")
         self.RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "mockwebhooksecret123")

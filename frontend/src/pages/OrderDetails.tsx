@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { apiService, ApiError } from '../services/api';
 import type { AuditEvent, Product, Order, OrderStatus } from '../types';
+import { formatDate as formatUTCDate } from '../utils/date';
 import OrderSummary from '../components/orders/OrderSummary';
 import OrderItems from '../components/orders/OrderItems';
 import OrderTimeline from '../components/orders/OrderTimeline';
@@ -181,14 +182,7 @@ export default function OrderDetails() {
   };
 
   const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    });
+    return formatUTCDate(dateStr, true);
   };
 
   if (loading) {

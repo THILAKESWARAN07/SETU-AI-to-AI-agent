@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { apiService, ApiError } from '../services/api';
 import type { Transaction, AuditEvent } from '../types';
+import { formatDate as formatUTCDate } from '../utils/date';
 import TransactionAuditTrail from '../components/transactions/TransactionAuditTrail';
 import './TransactionDetails.css';
 
@@ -135,14 +136,7 @@ export default function TransactionDetails() {
   };
 
   const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    });
+    return formatUTCDate(dateStr, true);
   };
 
   // Security status flags

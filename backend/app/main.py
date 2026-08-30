@@ -415,6 +415,7 @@ def verify_payment(payload: schemas.PaymentVerifySchema, db: Session = Depends(g
     Cryptographically verifies the Razorpay payment callback signature on the server.
     Ensures that amounts are locked and transactions are processed idempotently.
     """
+    logger.info(f"Received signature verification request for order_id: {payload.razorpay_order_id}")
     tx = db.query(models.Transaction).filter(
         models.Transaction.razorpay_order_id == payload.razorpay_order_id
     ).first()
@@ -521,7 +522,10 @@ def get_audit_trail(db: Session = Depends(get_db)):
 
 @app.get("/api/transactions", response_model=List[schemas.TransactionSchema])
 def get_transactions(db: Session = Depends(get_db)):
-    return db.query(models.Transaction).order_by(models.Transaction.created_at.desc()).all()
+    logger.info("Retrieving transaction archive from database.")
+    txs = db.query(models.Transaction).order_by(models.Transaction.created_at.desc()).all()
+    logger.info(f"Retrieved {len(txs)} transactions from database.")
+    return txs
 
 
 # --- E2E DEMO ORCHESTRATION ENDPOINT ---

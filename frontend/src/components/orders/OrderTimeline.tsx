@@ -13,6 +13,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import type { AuditEvent } from '../../types';
+import { formatDate as formatUTCDate } from '../../utils/date';
 import './OrderTimeline.css';
 
 interface OrderTimelineProps {
@@ -49,13 +50,7 @@ export default function OrderTimeline({ sessionEvents }: OrderTimelineProps) {
   };
 
   const formatTimestamp = (tsStr: string) => {
-    return new Date(tsStr).toLocaleString('en-IN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      day: '2-digit',
-      month: 'short'
-    });
+    return formatUTCDate(tsStr, true);
   };
 
   // Downstream fulfillment states

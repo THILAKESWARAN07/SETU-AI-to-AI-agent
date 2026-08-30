@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { Eye, ArrowRight } from 'lucide-react';
 import type { Transaction } from '../../types';
+import { formatDate } from '../../utils/date';
 import './TransactionList.css';
 
 interface TransactionListProps {
@@ -16,17 +17,6 @@ export default function TransactionList({ transactions }: TransactionListProps) 
       currency: 'INR',
       maximumFractionDigits: 2
     }).format(value);
-  };
-
-  const formatDate = (dateStr: string) => {
-    const d = new Date(dateStr);
-    return d.toLocaleString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
   };
 
   return (
