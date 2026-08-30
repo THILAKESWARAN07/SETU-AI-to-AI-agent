@@ -19,6 +19,40 @@ import { apiService } from '../services/api';
 import type { DemoCommerceResponse } from '../types';
 import './Negotiation.css';
 
+const LOG_TEMPLATES = [
+  { time: 0.4, text: "Intent payload registered" },
+  { time: 0.8, text: "Budget constraints extracted" },
+  { time: 1.2, text: "Merchant policy loaded" },
+  { time: 1.7, text: "Buyer Agent runtime initialized" },
+  { time: 2.4, text: "Merchant Agent runtime initialized" },
+  { time: 3.1, text: "SETU trust sandbox secured" },
+  { time: 3.8, text: "Establishing negotiation channel..." },
+  { time: 5.0, text: "Synchronizing agent knowledge boundaries..." },
+  { time: 6.5, text: "Spawning secure turn-loop controllers..." },
+  { time: 8.0, text: "Handshaking with Gemini API service..." },
+  { time: 10.0, text: "Server load high. Maintaining secure agent session..." },
+  { time: 12.5, text: "Retrying secure channel verification..." },
+  { time: 15.0, text: "Maintaining active state..." }
+];
+
+const stages = [
+  "Procurement intent received",
+  "Purchase constraints parsed",
+  "Catalog context loaded",
+  "Initializing Buyer Agent",
+  "Initializing Merchant Agent",
+  "Establishing SETU policy sandbox",
+  "Connecting to live LLM provider",
+  "Starting negotiation runtime"
+];
+
+const stageTimes = [0.5, 1.2, 2.0, 3.0, 4.0, 5.2, 6.5, 8.0];
+
+const formatLogTime = (secs: number) => {
+  const rounded = secs.toFixed(1);
+  return `[${rounded.padStart(4, '0')}s]`;
+};
+
 export default function Negotiation() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -42,6 +76,11 @@ export default function Negotiation() {
   const [animatedPrice, setAnimatedPrice] = useState('0.00');
 
   const animationTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Custom states and refs for interactive progressive loading
+  const [elapsed, setElapsed] = useState(0);
+  const loadingTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const terminalEndRef = useRef<HTMLDivElement | null>(null);
 
   // 1. Fetch result if not present (using intent and budget from state)
   useEffect(() => {
@@ -79,6 +118,35 @@ export default function Negotiation() {
       if (animationTimer.current) clearInterval(animationTimer.current);
     };
   }, []);
+
+  // Manage initialization loading timer
+  useEffect(() => {
+    if (isLoading) {
+      setElapsed(0);
+      loadingTimer.current = setInterval(() => {
+        setElapsed((prev) => prev + 0.1);
+      }, 100);
+    } else {
+      if (loadingTimer.current) {
+        clearInterval(loadingTimer.current);
+        loadingTimer.current = null;
+      }
+    }
+
+    return () => {
+      if (loadingTimer.current) {
+        clearInterval(loadingTimer.current);
+      }
+    };
+  }, [isLoading]);
+
+  // Scroll terminal logs to bottom when log count changes
+  const visibleLogsCount = LOG_TEMPLATES.filter(log => elapsed >= log.time).length;
+  useEffect(() => {
+    if (terminalEndRef.current) {
+      terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [visibleLogsCount]);
 
   // 2. Timeline items compiler function
   const compileTimelineEvents = (res: DemoCommerceResponse) => {
@@ -341,16 +409,159 @@ export default function Negotiation() {
 
   // 4. UI Rendering States
   if (isLoading) {
+    const buyerActive = elapsed >= 3.0;
+    const buyerStatusLabel = elapsed < 3.0 ? "PENDING" : elapsed < 3.6 ? "INITIALIZING" : "ACTIVE";
+
+    const merchantActive = elapsed >= 4.0;
+    const merchantStatusLabel = elapsed < 4.0 ? "PENDING" : elapsed < 4.8 ? "INITIALIZING" : "ACTIVE";
+
+    const trustActive = elapsed >= 5.2;
+    const trustStatusLabel = elapsed < 5.2 ? "PENDING" : elapsed < 6.2 ? "SECURING" : "ENFORCED";
+
+    const visibleLogs = LOG_TEMPLATES.filter(log => elapsed >= log.time);
+    
+    // Progress calculation
+    let progressPercent = 0;
+    if (elapsed <= 8.0) {
+      progressPercent = (elapsed / 8.0) * 90;
+    } else {
+      progressPercent = 90 + 5 * (1 - Math.exp(-(elapsed - 8.0) / 10));
+    }
+
+    const currentStageIndex = stageTimes.findIndex(t => elapsed < t);
+    const currentStageNumber = currentStageIndex === -1 ? 8 : currentStageIndex + 1;
+
+    const totalChars = 20;
+    const filledChars = Math.min(totalChars, Math.floor((progressPercent / 100) * totalChars));
+    const emptyChars = totalChars - filledChars;
+    const charBar = '█'.repeat(filledChars) + '░'.repeat(emptyChars);
+
     return (
-      <div className="negotiation-page-container container animate-fade-in" style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '20px', alignItems: 'center' }}>
-          <Loader2 className="securing-spinner animate-spin" style={{ width: '48px', height: '48px', color: 'var(--primary)' }} />
-          <h3 style={{ fontSize: '1.3rem', fontWeight: 700, letterSpacing: '0.02em', textTransform: 'uppercase' }}>
-            Spawning Autonomous AI Agents...
-          </h3>
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', maxWidth: '400px' }}>
-            Setting up policy sandboxes, parsing purchase constraints, and initiating negotiations turn loops.
-          </p>
+      <div className="negotiation-page-container container animate-fade-in" style={{ minHeight: '80vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="loader-panel-container">
+          <div>
+            <h3 className="loader-panel-title">
+              Spawning Autonomous AI Agents
+            </h3>
+            <p className="loader-panel-subtitle">
+              Setting up policy sandboxes, parsing purchase constraints, and initiating negotiation turn loops.
+            </p>
+          </div>
+
+          {/* Central Visualization */}
+          <div className="visualizer-wrapper">
+            {/* Buyer Agent Node */}
+            <div className={`visual-node buyer-node ${buyerActive ? 'active-node' : ''}`}>
+              <User className="visual-node-icon" />
+              <span className="visual-node-label">BUYER AGENT</span>
+              <span className="visual-node-status">{buyerStatusLabel}</span>
+            </div>
+
+            {/* Connector Left */}
+            <div className="visual-connector-line">
+              {buyerActive && <div className="connector-pulse-dot pulse-right" style={{ opacity: 1 }} />}
+            </div>
+
+            {/* SETU Trust Layer Node */}
+            <div className={`visual-node trust-node ${trustActive ? 'active-node' : ''}`}>
+              <Shield className="visual-node-icon" />
+              <span className="visual-node-label">SETU TRUST LAYER</span>
+              <span className="visual-node-status">{trustStatusLabel}</span>
+            </div>
+
+            {/* Connector Right */}
+            <div className="visual-connector-line">
+              {merchantActive && <div className="connector-pulse-dot pulse-left" style={{ opacity: 1 }} />}
+            </div>
+
+            {/* Merchant Agent Node */}
+            <div className={`visual-node merchant-node ${merchantActive ? 'active-node' : ''}`}>
+              <Store className="visual-node-icon" />
+              <span className="visual-node-label">MERCHANT AGENT</span>
+              <span className="visual-node-status">{merchantStatusLabel}</span>
+            </div>
+          </div>
+
+          {/* Main Grid: Left Stages, Right Terminal */}
+          <div className="loader-grid">
+            <div className="stages-list-container">
+              {stages.map((stage, idx) => {
+                const t = stageTimes[idx];
+                let status: 'completed' | 'active' | 'pending' = 'pending';
+                if (elapsed >= t) {
+                  status = 'completed';
+                } else {
+                  const prevCompleted = idx === 0 || elapsed >= stageTimes[idx - 1];
+                  if (prevCompleted) {
+                    status = 'active';
+                  }
+                }
+
+                return (
+                  <div key={idx} className={`stage-item stage-${status}`}>
+                    <div className="stage-indicator">
+                      {status === 'completed' && <CheckCircle2 className="stage-indicator-check" />}
+                      {status === 'active' && <Loader2 className="stage-indicator-active" style={{ width: '16px', height: '16px' }} />}
+                      {status === 'pending' && <div className="stage-indicator-dot" />}
+                    </div>
+                    <span className="stage-label">{stage}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="terminal-console-container">
+              <div className="terminal-header">
+                <div className="terminal-dots">
+                  <div className="terminal-dot dot-red" />
+                  <div className="terminal-dot dot-yellow" />
+                  <div className="terminal-dot dot-green" />
+                </div>
+                <span className="terminal-title">AGENT COMPILER SHELL</span>
+              </div>
+              <div className="terminal-log-area">
+                {visibleLogs.map((log, idx) => (
+                  <div key={idx} className="terminal-log-line animate-fade-in">
+                    <span className="terminal-log-time">{formatLogTime(log.time)}</span>
+                    <span className="terminal-log-text">{log.text}</span>
+                  </div>
+                ))}
+                <div ref={terminalEndRef} />
+                <span className="terminal-caret" />
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom Progress Bar Panel */}
+          <div className="progress-panel-container">
+            <div className="progress-header-info">
+              <span className="progress-title-text">INITIALIZING AGENT RUNTIME</span>
+              <span className="progress-ratio-text">STAGE {currentStageNumber}/8</span>
+            </div>
+            
+            <div className="retro-progress-bar">
+              [{charBar}]
+            </div>
+
+            <div className="progress-bar-graphic-track">
+              <div className="progress-bar-graphic-fill" style={{ width: `${progressPercent}%` }} />
+            </div>
+
+            <div className="progress-footer-info">
+              <span className="progress-footer-status">
+                {currentStageNumber <= 8 ? stages[currentStageNumber - 1] : 'Finalizing negotiation handshake...'}
+              </span>
+              <span className="progress-elapsed-timer">ELAPSED: {elapsed.toFixed(1)}s</span>
+            </div>
+          </div>
+
+          {/* Keep Alive Info Message for longer loading */}
+          {elapsed >= 8.0 && (
+            <div className="keep-alive-banner">
+              <Activity className="keep-alive-icon" style={{ flexShrink: 0 }} />
+              <span>Live AI runtime is still processing. Maintaining secure agent session...</span>
+            </div>
+          )}
         </div>
       </div>
     );
