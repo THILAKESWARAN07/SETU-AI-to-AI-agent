@@ -7,6 +7,7 @@ interface PolicyEnginePanelProps {
   discountPercent: string;
   marginPercent: string;
   policyVersion: string;
+  basket?: any;
 }
 
 export default function PolicyEnginePanel({
@@ -14,7 +15,8 @@ export default function PolicyEnginePanel({
   finalAmount,
   discountPercent,
   marginPercent,
-  policyVersion
+  policyVersion,
+  basket
 }: PolicyEnginePanelProps) {
   const discountVal = parseFloat(originalAmount) - parseFloat(finalAmount);
 
@@ -73,15 +75,19 @@ export default function PolicyEnginePanel({
         <div className="rules-grid">
           <div className="rule-item-status passed">
             <span className="rule-dot green" />
-            <span>Discount Cap Check: APPROVED (Boundary: &lt; 10%)</span>
+            <span>Product Relevance: APPROVED (Compatible complementary items only)</span>
           </div>
           <div className="rule-item-status passed">
             <span className="rule-dot green" />
-            <span>Profit Margin Check: APPROVED (Boundary: &gt; 20%)</span>
+            <span>Budget Validation: APPROVED (Total amount is within procurement budget limit)</span>
           </div>
           <div className="rule-item-status passed">
             <span className="rule-dot green" />
-            <span>Order Limit Check: APPROVED (Boundary: &lt; ₹2,000)</span>
+            <span>Profit Margin Check: APPROVED (Calculated basket margin matches policy margin)</span>
+          </div>
+          <div className="rule-item-status passed">
+            <span className="rule-dot green" />
+            <span>Basket Integrity: APPROVED ({basket?.items?.length ? `${basket.items.length} items verified against catalog` : 'Negotiated basket items match database catalog prices'})</span>
           </div>
         </div>
       </div>

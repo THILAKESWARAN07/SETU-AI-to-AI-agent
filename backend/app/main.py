@@ -232,12 +232,32 @@ def create_purchase_request(request: schemas.PurchaseRequestCreate, db: Session 
     if not policy:
         raise HTTPException(status_code=500, detail="Active merchant policy not found")
 
-    # Evaluate the proposed purchase price
-    eval_result = PolicyEngine.evaluate(
-        product=product,
+    # Resolve/build the basket
+    resolved_basket = request.basket
+    if not resolved_basket:
+        resolved_basket = {
+            "items": [
+                {
+                    "product_id": request.product_id,
+                    "name": product.name,
+                    "quantity": request.quantity,
+                    "original_price": str(product.price),
+                    "negotiated_price": str(request.final_amount / Decimal(request.quantity)),
+                    "is_primary": True
+                }
+            ],
+            "original_total": str(request.original_amount),
+            "final_total": str(request.final_amount),
+            "discount_amount": str(request.original_amount - request.final_amount)
+        }
+
+    # Evaluate the proposed purchase basket
+    eval_result = PolicyEngine.evaluate_basket(
+        basket=resolved_basket,
         policy=policy,
-        quantity=request.quantity,
-        final_amount=request.final_amount
+        buyer_budget=Decimal("1000000.00"),
+        primary_product_id=request.product_id,
+        db=db
     )
 
     decision_status = eval_result["decision"]  # APPROVED, BLOCKED, REQUIRES_APPROVAL
@@ -253,7 +273,8 @@ def create_purchase_request(request: schemas.PurchaseRequestCreate, db: Session 
         discount_percent=request.discount_percent,
         currency=request.currency,
         reason=request.reason,
-        status=decision_status
+        status=decision_status,
+        basket=resolved_basket
     )
     db.add(purchase_req)
     db.commit()

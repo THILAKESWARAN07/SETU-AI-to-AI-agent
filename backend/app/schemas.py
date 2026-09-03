@@ -18,6 +18,7 @@ class ProductBase(BaseModel):
     inventory: int = 0
     attributes: Dict[str, Any] = Field(default_factory=dict)
     related_product_ids: List[int] = Field(default_factory=list)
+    min_selling_price: Optional[Decimal] = None
     active: bool = True
 
 class ProductCreate(ProductBase):
@@ -58,6 +59,7 @@ class PurchaseRequestBase(BaseModel):
     discount_percent: Decimal
     currency: str = "INR"
     reason: Optional[str] = None
+    basket: Optional[Dict[str, Any]] = None
 
 class PurchaseRequestCreate(PurchaseRequestBase):
     pass
@@ -66,6 +68,7 @@ class PurchaseRequestSchema(PurchaseRequestBase):
     id: int
     status: str
     created_at: datetime
+    basket: Optional[Dict[str, Any]] = None
 
     @field_serializer('created_at')
     def serialize_created_at(self, dt: datetime, _info):

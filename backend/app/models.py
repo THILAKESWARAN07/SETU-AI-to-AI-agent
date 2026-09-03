@@ -15,6 +15,7 @@ class Product(Base):
     inventory = Column(Integer, default=0, nullable=False)
     attributes = Column(JSON, default=dict)
     related_product_ids = Column(JSON, default=list)
+    min_selling_price = Column(Numeric(10, 2, asdecimal=True), nullable=True)
     active = Column(Boolean, default=True, nullable=False)
 
     purchase_requests = relationship("PurchaseRequest", back_populates="product")
@@ -50,6 +51,7 @@ class PurchaseRequest(Base):
     reason = Column(String)
     status = Column(String, default="PENDING", nullable=False)  # PENDING, APPROVED, BLOCKED, REQUIRES_APPROVAL, PAID
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    basket = Column(JSON, nullable=True)
 
     product = relationship("Product", back_populates="purchase_requests")
     policy_decisions = relationship("PolicyDecision", back_populates="purchase_request", cascade="all, delete-orphan")

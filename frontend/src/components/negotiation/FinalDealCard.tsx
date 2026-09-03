@@ -7,6 +7,7 @@ interface FinalDealCardProps {
   discountPercent: string;
   decision: string;
   onCheckout: () => void;
+  basket?: any;
 }
 
 export default function FinalDealCard({
@@ -14,7 +15,8 @@ export default function FinalDealCard({
   finalAmount,
   discountPercent,
   decision,
-  onCheckout
+  onCheckout,
+  basket
 }: FinalDealCardProps) {
   const discountVal = parseFloat(originalAmount) - parseFloat(finalAmount);
 
@@ -23,11 +25,46 @@ export default function FinalDealCard({
     onCheckout();
   };
 
+  const primaryItem = basket?.items?.find((i: any) => i.is_primary);
+  const dealTitle = primaryItem 
+    ? (basket.items.length > 1 ? `${primaryItem.name} + Accessories Bundle` : primaryItem.name)
+    : "Negotiated Deal Package";
+
   return (
     <div className="final-deal-card animate-fade-in">
       <span className="deal-badge">APPROVED OFFER</span>
-      <h3 className="deal-title">Earbuds + Charging Case Bundle</h3>
+      <h3 className="deal-title">{dealTitle}</h3>
       
+      {basket && basket.items && (
+        <div className="negotiated-basket-container" style={{ marginTop: '12px', marginBottom: '15px', border: '1px solid rgba(255,255,255,0.08)', padding: '12px', borderRadius: '6px', background: 'rgba(0,0,0,0.3)' }}>
+          <div style={{ fontSize: '10px', color: 'var(--text-secondary)', fontFamily: 'monospace', letterSpacing: '1px', marginBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '4px', fontWeight: 'bold' }}>NEGOTIATED BASKET</div>
+          {basket.items.map((item: any, idx: number) => {
+            const itemOrig = parseFloat(item.original_price) * item.quantity;
+            const itemNeg = parseFloat(item.negotiated_price) * item.quantity;
+            const itemDisc = itemOrig - itemNeg;
+            return (
+              <div key={idx} style={{ display: 'flex', flexDirection: 'column', padding: '6px 0', borderBottom: idx < basket.items.length - 1 ? '1px dashed rgba(255,255,255,0.08)' : 'none' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text-primary)' }}>
+                    {item.name} {item.quantity > 1 ? `x${item.quantity}` : ''}
+                    {item.is_primary && <span style={{ fontSize: '9px', marginLeft: '6px', padding: '1px 4px', borderRadius: '3px', background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.25)' }}>PRIMARY</span>}
+                  </span>
+                  <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 'bold' }}>
+                    ₹{itemNeg.toLocaleString('en-IN')}
+                  </span>
+                </div>
+                {itemDisc > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-success)', marginTop: '2px' }}>
+                    <span>Original: ₹{itemOrig.toLocaleString('en-IN')}</span>
+                    <span>Saved: -₹{itemDisc.toLocaleString('en-IN')}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <div className="deal-pricing-breakdown">
         <div className="deal-price-row">
           <span className="price-desc">Original Amount:</span>

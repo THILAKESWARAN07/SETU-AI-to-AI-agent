@@ -5,6 +5,7 @@ export interface Product {
   description: string | null;
   price: number;
   cost: number;
+  min_selling_price?: number;
   inventory: number;
   attributes: Record<string, any>;
   related_product_ids: number[];
@@ -85,6 +86,37 @@ export interface DemoCommerceRequest {
   budget?: number;
 }
 
+export interface NegotiationHistoryItem {
+  round: number;
+  buyer_offer?: {
+    product_id: number;
+    quantity: number;
+    original_amount: string;
+    final_amount: string;
+    currency: string;
+    reason: string;
+    message?: string;
+    reason_label?: string;
+    tools_used?: string[];
+    confidence?: number;
+    basket_items?: any[];
+  } | null;
+  merchant_offer?: {
+    product_ids: number[];
+    original_amount: string;
+    offered_amount: string;
+    discount_percent: string;
+    reason: string;
+    message?: string;
+    reason_label?: string;
+    tools_used?: string[];
+    confidence?: number;
+    basket_items?: any[];
+  } | null;
+  accepted: boolean;
+  reason: string;
+}
+
 export interface DemoCommerceResponse {
   buyer_id: string;
   intent: string;
@@ -92,7 +124,7 @@ export interface DemoCommerceResponse {
   selected_product_id: number;
   cross_sell_product_id: number;
   bundle_offer: Record<string, any>;
-  negotiation_history: Record<string, any>[];
+  negotiation_history: NegotiationHistoryItem[];
   purchase_request_id: number;
   decision: string;
   reasons: string[];
@@ -101,6 +133,7 @@ export interface DemoCommerceResponse {
   discount_percent: string;
   margin_percent: string;
   policy_version: string;
+  basket?: any;
   
   // Step 10 dynamic params
   agent_mode?: string;

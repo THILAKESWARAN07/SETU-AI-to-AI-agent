@@ -51,12 +51,59 @@ def search_catalog_tool(db: Session, query: Optional[str] = None, category: Opti
     """
     db_query = db.query(Product).filter(Product.active == True)
     if category:
-        db_query = db_query.filter(Product.category.ilike(category))
+        category_lower = category.lower()
+        if category_lower in ["mobile phones", "mobile", "phones", "smartphones"]:
+            db_query = db_query.filter(Product.category.in_(["Mobile Phones", "MOBILE PHONES"]))
+        elif category_lower in ["audio", "sound", "headphones", "earbuds", "earphones"]:
+            db_query = db_query.filter(Product.category.in_(["Audio", "AUDIO", "Electronics", "Accessories"]))
+        elif category_lower in ["computing", "laptops", "computers"]:
+            db_query = db_query.filter(Product.category.in_(["Computing", "COMPUTING", "Laptops"]))
+        elif category_lower in ["wearables", "smartwatches", "watches"]:
+            db_query = db_query.filter(Product.category.in_(["Wearables", "WEARABLES", "Smartwatches"]))
+        else:
+            db_query = db_query.filter(Product.category.ilike(category))
+            
     products = db_query.all()
     
     if query:
         query_lower = query.lower()
-        products = [p for p in products if query_lower in p.name.lower() or query_lower in (p.description or "").lower()]
+        matched_products = []
+        for p in products:
+            name_lower = p.name.lower()
+            desc_lower = (p.description or "").lower()
+            cat_lower = p.category.lower()
+            
+            # 1. Laptop accessories & computing boundary check
+            if "laptop accessories" in query_lower or "computer accessories" in query_lower:
+                if cat_lower in ["computing", "laptops"] or (cat_lower == "accessories" and any(rid in [21, 22, 52, 53, 54, 55] for rid in (p.related_product_ids or []))):
+                    matched_products.append(p)
+                continue
+
+            # 2. Smartwatch / Wearables alias
+            if "smartwatch" in query_lower or "watch strap" in query_lower or "wearable" in query_lower:
+                if cat_lower in ["wearables", "smartwatches"] or "smartwatch" in name_lower or "watch" in name_lower or "strap" in name_lower:
+                    matched_products.append(p)
+                continue
+
+            # 3. Smartphone / Phone alias
+            if "phone" in query_lower or "mobile" in query_lower or "smartphone" in query_lower or "galaxy" in query_lower or "redmi" in query_lower or "motorola" in query_lower:
+                if cat_lower == "mobile phones" or "phone" in name_lower or "galaxy" in name_lower or "redmi" in name_lower or "motorola" in name_lower or (cat_lower == "accessories" and any(rid in [11, 12, 41, 42, 43] for rid in (p.related_product_ids or []))):
+                    matched_products.append(p)
+                continue
+                
+            # 4. Earphones / Earbuds / Audio alias
+            if "earphone" in query_lower or "earbud" in query_lower or "headphone" in query_lower:
+                if "earbud" in name_lower or "earphone" in name_lower or "charging case" in name_lower or "protective case" in name_lower or (cat_lower in ["audio", "electronics"] and "speaker" not in name_lower):
+                    matched_products.append(p)
+                continue
+
+            # Default keyword match
+            if (query_lower in name_lower or 
+                query_lower in desc_lower or 
+                query_lower in cat_lower):
+                matched_products.append(p)
+                
+        products = matched_products
         
     return [
         {
@@ -267,10 +314,11 @@ def request_purchase_tool(
     product_id: int,
     quantity: int,
     proposed_price: str,
-    reason: str
+    reason: str,
+    basket: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    Submits a purchase request to the database and evaluates it via the backend policy engine.
+    Submits a purchase offer for evaluation by the backend policy engine.
     """
     proposed_final_amount = Decimal(proposed_price)
     
@@ -288,6 +336,29 @@ def request_purchase_tool(
     unit_price = product.price
     original_amount = unit_price * Decimal(quantity)
     
+    # Resolve/build the basket
+    resolved_basket = basket
+    if not resolved_basket:
+        resolved_basket = {
+            "items": [
+                {
+                    "product_id": product_id,
+                    "name": product.name,
+                    "quantity": quantity,
+                    "original_price": str(unit_price),
+                    "negotiated_price": str(proposed_final_amount / Decimal(quantity)),
+                    "is_primary": True
+                }
+            ],
+            "original_total": str(original_amount),
+            "final_total": str(proposed_final_amount),
+            "discount_amount": str(original_amount - proposed_final_amount)
+        }
+
+    # Recalculate based on basket if available
+    original_amount = Decimal(resolved_basket.get("original_total", str(original_amount)))
+    proposed_final_amount = Decimal(resolved_basket.get("final_total", str(proposed_final_amount)))
+
     if original_amount > Decimal("0"):
         discount_amount = original_amount - proposed_final_amount
         discount_percent = (discount_amount / original_amount) * Decimal("100")
@@ -305,14 +376,15 @@ def request_purchase_tool(
         discount_percent=discount_percent,
         currency="INR",
         reason=reason,
-        status="PENDING"
+        status="PENDING",
+        basket=resolved_basket
     )
     db.add(req)
     db.commit()
     db.refresh(req)
 
-    # 4. Evaluate Policy
-    decision_dict = PolicyEngine.evaluate(product, policy, quantity, proposed_final_amount)
+    # 4. Evaluate Policy using evaluate_basket
+    decision_dict = PolicyEngine.evaluate_basket(resolved_basket, policy, Decimal("100000.00"), product_id, db)
     decision_status = decision_dict["decision"]  # APPROVED, BLOCKED, REQUIRES_APPROVAL
 
     # Update request status to match canonical policy decision status
