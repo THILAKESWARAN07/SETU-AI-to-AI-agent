@@ -33,31 +33,34 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error seeding database: {e}")
 
-    # Provider-chain startup diagnostics
+    # Provider-chain & Gateway startup diagnostics
     try:
-        from backend.app.agents.provider import get_provider_for_agent
-        gemini_present = bool(os.getenv("GEMINI_API_KEY") or getattr(settings, "GEMINI_API_KEY", ""))
-        groq_present = bool(os.getenv("GROQ_API_KEY") or getattr(settings, "GROQ_API_KEY", ""))
-        openrouter_present = bool(os.getenv("OPENROUTER_API_KEY") or getattr(settings, "OPENROUTER_API_KEY", ""))
+        from backend.app.agents.ai_gateway import get_ai_gateway
+        gateway = get_ai_gateway()
+        status = gateway.get_provider_status()
 
-        buyer_p = get_provider_for_agent("buyer")
-        merchant_p = get_provider_for_agent("merchant")
-        aux_p = get_provider_for_agent("auxiliary")
+        cerebras_present = status["providers"]["cerebras"]["configured"]
+        groq_present = status["providers"]["groq"]["configured"]
+        gemini_present = status["providers"]["gemini"]["configured"]
+        nvidia_present = status["providers"]["nvidia_nim"]["configured"]
+        openrouter_present = status["providers"]["openrouter"]["configured"]
+        ollama_present = status["providers"]["ollama"]["configured"]
 
-        buyer_chain_names = [p.provider_name for p in getattr(buyer_p, "providers", [buyer_p])]
-        merchant_chain_names = [p.provider_name for p in getattr(merchant_p, "providers", [merchant_p])]
-        aux_chain_names = [p.provider_name for p in getattr(aux_p, "providers", [aux_p])]
+        buyer_chain = gateway.resolve_chain("buyer")
+        merchant_chain = gateway.resolve_chain("merchant")
+        aux_chain = gateway.resolve_chain("auxiliary")
 
-        logger.info("=" * 60)
-        logger.info("SETU MULTI-PROVIDER AGENT ARCHITECTURE STARTUP DIAGNOSTICS")
-        logger.info(f"Keys Configured: GEMINI_API_KEY={gemini_present}, GROQ_API_KEY={groq_present}, OPENROUTER_API_KEY={openrouter_present}")
-        logger.info(f"Buyer Chain:     {' -> '.join(buyer_chain_names)}")
-        logger.info(f"Merchant Chain:  {' -> '.join(merchant_chain_names)}")
-        logger.info(f"Auxiliary Chain: {' -> '.join(aux_chain_names)}")
-        logger.info(f"Fast 429 Failover Policy: ACTIVE (zero-delay handoff to next real provider)")
-        logger.info("=" * 60)
+        logger.info("=" * 70)
+        logger.info("SETU CENTRAL AI GATEWAY STARTUP DIAGNOSTICS")
+        logger.info(f"Keys Configured: Cerebras={cerebras_present}, Groq={groq_present}, Gemini={gemini_present}, NVIDIA={nvidia_present}, OpenRouter={openrouter_present}, Ollama={ollama_present}")
+        logger.info(f"Buyer Chain:     {' -> '.join(buyer_chain)}")
+        logger.info(f"Merchant Chain:  {' -> '.join(merchant_chain)}")
+        logger.info(f"Auxiliary Chain: {' -> '.join(aux_chain)}")
+        logger.info("Circuit Breaker: ACTIVE (Fast 0ms bypass on 429 / rate limits / auth errors)")
+        logger.info("Deterministic Logic: 100% Python/SQL tools (Catalog, Policy, Margin, Payment, Audit)")
+        logger.info("=" * 70)
     except Exception as e:
-        logger.warning(f"Could not log provider startup diagnostics: {e}")
+        logger.warning(f"Could not log AI Gateway startup diagnostics: {e}")
 
     yield
 
@@ -111,14 +114,20 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 def get_provider_status():
     import os
     from backend.app.config import settings
+    from backend.app.agents.ai_gateway import get_ai_gateway
     from backend.app.agents.provider import get_provider_for_agent, get_provider
     
+    gateway = get_ai_gateway()
+    gw_status = gateway.get_provider_status()
+
     buyer_p = get_provider_for_agent("buyer")
     merchant_p = get_provider_for_agent("merchant")
     auxiliary_p = get_provider_for_agent("auxiliary")
     legacy_p = get_provider()
 
     return {
+        "gateway_status": "ONLINE",
+        "primary_provider": getattr(settings, "PRIMARY_LLM_PROVIDER", "cerebras"),
         "configured_provider": os.getenv("LLM_PROVIDER", settings.LLM_PROVIDER).lower(),
         "configured_model": os.getenv("LLM_MODEL", settings.LLM_MODEL),
         "timeout_seconds": float(os.getenv("LLM_TIMEOUT_SECONDS", str(settings.LLM_TIMEOUT_SECONDS))),
@@ -133,7 +142,7 @@ def get_provider_status():
             "active_provider": buyer_p.provider_name,
             "active_model": buyer_p.model_name,
             "agent_mode": buyer_p.agent_mode,
-            "chain": [p.provider_name for p in getattr(buyer_p, "providers", [buyer_p])],
+            "chain": gateway.resolve_chain("buyer"),
         },
         "merchant": {
             "configured_primary": settings.MERCHANT_LLM_PROVIDER,
@@ -142,7 +151,7 @@ def get_provider_status():
             "active_provider": merchant_p.provider_name,
             "active_model": merchant_p.model_name,
             "agent_mode": merchant_p.agent_mode,
-            "chain": [p.provider_name for p in getattr(merchant_p, "providers", [merchant_p])],
+            "chain": gateway.resolve_chain("merchant"),
         },
         "auxiliary": {
             "configured_primary": settings.AUXILIARY_LLM_PROVIDER,
@@ -151,13 +160,21 @@ def get_provider_status():
             "active_provider": auxiliary_p.provider_name,
             "active_model": auxiliary_p.model_name,
             "agent_mode": auxiliary_p.agent_mode,
-            "chain": [p.provider_name for p in getattr(auxiliary_p, "providers", [auxiliary_p])],
+            "chain": gateway.resolve_chain("auxiliary"),
         },
         "keys_configured": {
-            "gemini": bool(settings.GEMINI_API_KEY),
-            "openrouter": bool(settings.OPENROUTER_API_KEY),
-            "groq": bool(settings.GROQ_API_KEY)
+            "cerebras": gw_status["providers"]["cerebras"]["configured"],
+            "groq": gw_status["providers"]["groq"]["configured"],
+            "gemini": gw_status["providers"]["gemini"]["configured"],
+            "nvidia_nim": gw_status["providers"]["nvidia_nim"]["configured"],
+            "openrouter": gw_status["providers"]["openrouter"]["configured"],
+            "ollama": gw_status["providers"]["ollama"]["configured"],
         },
+        "circuit_states": {
+            p: data["circuit"]["circuit_state"]
+            for p, data in gw_status["providers"].items()
+        },
+        "gateway_details": gw_status,
         "fallback_to_mock_enabled": settings.LLM_FALLBACK_TO_MOCK
     }
 

@@ -39,6 +39,9 @@ def test_complete_e2e_commerce_flow(client: TestClient, db, monkeypatch):
         "status": "created"
     }
     monkeypatch.setattr(payments_module, "get_payment_adapter", lambda: mock_adapter)
+    monkeypatch.setenv("BUYER_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("MERCHANT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("PRIMARY_LLM_PROVIDER", "mock")
 
     # 1. Trigger Orchestrated Commerce Flow
     req_data = {

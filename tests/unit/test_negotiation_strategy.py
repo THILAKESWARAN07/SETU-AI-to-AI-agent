@@ -441,10 +441,14 @@ def test_negotiation_runtime_latency_under_5_seconds(db: Session):
 
 
 # 20. Performance benchmark: SSE streaming emits first event rapidly (< 1.5s) and full stream under 5s
-def test_sse_stream_latency_and_first_event_speed(db: Session, client: TestClient):
+def test_sse_stream_latency_and_first_event_speed(db: Session, client: TestClient, monkeypatch):
     import time
     import json
     
+    monkeypatch.setenv("BUYER_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("MERCHANT_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("PRIMARY_LLM_PROVIDER", "mock")
+
     req_data = {
         "buyer_id": "test_perf_sse_buyer",
         "intent": "I need wireless earbuds under 2000 INR",

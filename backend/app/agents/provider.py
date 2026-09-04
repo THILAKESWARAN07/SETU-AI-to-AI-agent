@@ -1692,8 +1692,8 @@ class AgentProviderRouter:
         legacy_model = os.getenv("LLM_MODEL")
 
         if role == "buyer":
-            primary_name = os.getenv("BUYER_LLM_PROVIDER") or legacy_override or settings.BUYER_LLM_PROVIDER
-            primary_model = os.getenv("BUYER_LLM_MODEL") or legacy_model or settings.BUYER_LLM_MODEL
+            primary_name = legacy_override or os.getenv("BUYER_LLM_PROVIDER") or settings.BUYER_LLM_PROVIDER
+            primary_model = legacy_model or os.getenv("BUYER_LLM_MODEL") or settings.BUYER_LLM_MODEL
             fallbacks_raw = os.getenv("BUYER_LLM_FALLBACKS", settings.BUYER_LLM_FALLBACKS)
         elif role == "merchant":
             primary_name = os.getenv("MERCHANT_LLM_PROVIDER") or legacy_override or settings.MERCHANT_LLM_PROVIDER

@@ -96,9 +96,9 @@ class MerchantAgent:
     def negotiate(self, db: Session, prompt: str) -> Negotiation:
         return self.provider.generate_structured_response(prompt, self.system_instruction, Negotiation)
 
-    def negotiate_decision(self, db: Session, prompt: str, memory: Optional[Any] = None) -> MerchantDecision:
+    def negotiate_decision(self, db: Session, prompt: str, memory: Optional[Any] = None, context: Optional[Any] = None) -> MerchantDecision:
         if memory is None:
             from backend.app.agents.memory import NegotiationMemory
             memory = NegotiationMemory(session_id="dummy_session_merchant", product_id=1)
         from backend.app.agents.runtime import execute_agent_loop
-        return execute_agent_loop(db, self, self.provider, memory, prompt, MerchantDecision)
+        return execute_agent_loop(db, self, self.provider, memory, prompt, MerchantDecision, context=context)

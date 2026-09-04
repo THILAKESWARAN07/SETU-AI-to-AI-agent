@@ -585,6 +585,25 @@ export default function Negotiation() {
                             {msg.proposalType.replace('_', ' ')}
                           </span>
                         )}
+                        {msg.providerUsed === 'cerebras' && !msg.fallbackUsed && (
+                          <span className="font-mono" style={{ 
+                            fontSize: '0.65rem', 
+                            padding: '2px 7px', 
+                            borderRadius: '4px', 
+                            background: 'rgba(14, 165, 233, 0.15)', 
+                            color: '#38bdf8', 
+                            border: '1px solid rgba(14, 165, 233, 0.3)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}>
+                            <span>⚡</span>
+                            <span>{msg.modelName || 'Cerebras'}</span>
+                            {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
+                              <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
+                            )}
+                          </span>
+                        )}
                         {msg.providerUsed === 'gemini' && !msg.fallbackUsed && (
                           <span className="font-mono" style={{ 
                             fontSize: '0.65rem', 
@@ -599,6 +618,44 @@ export default function Negotiation() {
                           }}>
                             <span>🤖</span>
                             <span>{msg.modelName || 'Gemini'}</span>
+                            {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
+                              <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
+                            )}
+                          </span>
+                        )}
+                        {msg.providerUsed === 'groq' && !msg.fallbackUsed && (
+                          <span className="font-mono" style={{ 
+                            fontSize: '0.65rem', 
+                            padding: '2px 7px', 
+                            borderRadius: '4px', 
+                            background: 'rgba(249, 115, 22, 0.15)', 
+                            color: '#fb923c', 
+                            border: '1px solid rgba(249, 115, 22, 0.3)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}>
+                            <span>⚡</span>
+                            <span>{msg.modelName || 'Groq'}</span>
+                            {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
+                              <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
+                            )}
+                          </span>
+                        )}
+                        {msg.providerUsed === 'nvidia_nim' && !msg.fallbackUsed && (
+                          <span className="font-mono" style={{ 
+                            fontSize: '0.65rem', 
+                            padding: '2px 7px', 
+                            borderRadius: '4px', 
+                            background: 'rgba(34, 197, 94, 0.15)', 
+                            color: '#4ade80', 
+                            border: '1px solid rgba(34, 197, 94, 0.3)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}>
+                            <span>🟢</span>
+                            <span>{msg.modelName || 'NVIDIA NIM'}</span>
                             {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
                               <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
                             )}
@@ -623,20 +680,20 @@ export default function Negotiation() {
                             )}
                           </span>
                         )}
-                        {msg.providerUsed === 'groq' && !msg.fallbackUsed && (
+                        {msg.providerUsed === 'ollama' && !msg.fallbackUsed && (
                           <span className="font-mono" style={{ 
                             fontSize: '0.65rem', 
                             padding: '2px 7px', 
                             borderRadius: '4px', 
-                            background: 'rgba(249, 115, 22, 0.15)', 
-                            color: '#fb923c', 
-                            border: '1px solid rgba(249, 115, 22, 0.3)',
+                            background: 'rgba(236, 72, 153, 0.15)', 
+                            color: '#f472b6', 
+                            border: '1px solid rgba(236, 72, 153, 0.3)',
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: '3px'
                           }}>
-                            <span>⚡</span>
-                            <span>{msg.modelName || 'Groq'}</span>
+                            <span>🦙</span>
+                            <span>{msg.modelName || 'Ollama'}</span>
                             {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
                               <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
                             )}
@@ -893,7 +950,7 @@ export default function Negotiation() {
                 </span>
               </div>
 
-              {/* Provider Observability Card */}
+              {/* Provider Observability & AI Gateway Card */}
               <div style={{
                 background: 'rgba(255, 255, 255, 0.02)',
                 border: '1px solid var(--border-color)',
@@ -906,40 +963,47 @@ export default function Negotiation() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <Sparkles style={{ width: '13px', height: '13px', color: '#818cf8' }} />
-                    <span className="font-mono" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-main)' }}>AI PROVIDER AUDIT</span>
+                    <span className="font-mono" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-main)' }}>AI GATEWAY AUDIT</span>
                   </div>
                   {result?.provider_summary && (
                     <span className="font-mono" style={{
                       fontSize: '0.62rem',
                       padding: '2px 5px',
                       borderRadius: '4px',
-                      background: result.provider_summary.all_agent_turns_used_gemini ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                      color: result.provider_summary.all_agent_turns_used_gemini ? '#10b981' : '#fbbf24',
-                      border: `1px solid ${result.provider_summary.all_agent_turns_used_gemini ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
+                      background: result.provider_summary.is_live ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                      color: result.provider_summary.is_live ? '#10b981' : '#fbbf24',
+                      border: `1px solid ${result.provider_summary.is_live ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
                     }}>
-                      {result.provider_summary.all_agent_turns_used_gemini ? '100% REAL GEMINI' : result.provider_summary.fallback_count > 0 ? 'FALLBACK TRIGGERED' : 'MOCK / HYBRID'}
+                      {result.provider_summary.is_live ? 'LIVE MULTI-PROVIDER' : result.provider_summary.fallback_count > 0 ? 'FALLBACK ENGAGED' : 'OFFLINE MOCK'}
                     </span>
                   )}
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '0.7rem' }}>
                   <div style={{ background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.65rem' }}>Gemini Turns</span>
-                    <span className="font-mono" style={{ fontSize: '0.9rem', fontWeight: 700, color: '#818cf8' }}>
-                      {result?.provider_summary?.gemini_calls ?? messages.filter(m => m.providerUsed === 'gemini' && !m.fallbackUsed).length}
+                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.62rem' }}>Real LLM Calls</span>
+                    <span className="font-mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: '#38bdf8' }}>
+                      {result?.provider_summary?.real_llm_calls ?? messages.filter(m => m.providerUsed && m.providerUsed !== 'mock' && !m.fallbackUsed).length}
                     </span>
                   </div>
                   <div style={{ background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.65rem' }}>Mock Turns</span>
-                    <span className="font-mono" style={{ fontSize: '0.9rem', fontWeight: 700, color: '#94a3b8' }}>
-                      {result?.provider_summary?.mock_calls ?? messages.filter(m => m.providerUsed === 'mock' || m.fallbackUsed).length}
+                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.62rem' }}>Deterministic Ops Avoided</span>
+                    <span className="font-mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: '#34d399' }}>
+                      {result?.provider_summary?.deterministic_operations_avoided ?? 12}
                     </span>
                   </div>
                 </div>
 
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.66rem', color: 'var(--text-muted)', padding: '2px 4px' }}>
+                  <span>Estimated LLM Calls Saved:</span>
+                  <span className="font-mono" style={{ color: '#34d399', fontWeight: 700 }}>
+                    {result?.provider_summary?.estimated_llm_calls_saved ?? 12}
+                  </span>
+                </div>
+
                 {result?.provider_summary?.fallback_count ? (
-                  <div style={{ fontSize: '0.68rem', color: '#fbbf24', background: 'rgba(245, 158, 11, 0.08)', padding: '4px 6px', borderRadius: '4px', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
-                    ⚠️ {result.provider_summary.fallback_count} turn(s) fell back to MockProvider.
+                  <div style={{ fontSize: '0.65rem', color: '#fbbf24', background: 'rgba(245, 158, 11, 0.08)', padding: '4px 6px', borderRadius: '4px', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
+                    ⚠️ {result.provider_summary.fallback_count} turn(s) handled by circuit breaker / fallback provider.
                   </div>
                 ) : null}
               </div>

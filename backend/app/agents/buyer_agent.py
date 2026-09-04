@@ -96,12 +96,12 @@ class BuyerAgent:
     def negotiate(self, db: Session, prompt: str) -> Negotiation:
         return self.provider.generate_structured_response(prompt, self.system_instruction, Negotiation)
 
-    def negotiate_decision(self, db: Session, prompt: str, memory: Optional[Any] = None) -> BuyerDecision:
+    def negotiate_decision(self, db: Session, prompt: str, memory: Optional[Any] = None, context: Optional[Any] = None) -> BuyerDecision:
         if memory is None:
             from backend.app.agents.memory import NegotiationMemory
             memory = NegotiationMemory(session_id="dummy_session_buyer", product_id=1)
         from backend.app.agents.runtime import execute_agent_loop
-        return execute_agent_loop(db, self, self.provider, memory, prompt, BuyerDecision)
+        return execute_agent_loop(db, self, self.provider, memory, prompt, BuyerDecision, context=context)
         
     def request_purchase(self, db: Session, buyer_id: str, product_id: int, quantity: int, proposed_price: str, reason: str) -> Dict[str, Any]:
         return request_purchase_tool(db, buyer_id=buyer_id, product_id=product_id, quantity=quantity, proposed_price=proposed_price, reason=reason)

@@ -141,7 +141,7 @@ export interface ConversationEvent {
   is_final?: boolean;
   
   // Provider Observability Metadata
-  provider_used?: 'gemini' | 'openrouter' | 'groq' | 'mock' | string;
+  provider_used?: 'cerebras' | 'groq' | 'gemini' | 'nvidia_nim' | 'openrouter' | 'ollama' | 'mock' | string;
   provider_type?: 'real_llm' | 'deterministic_fallback';
   model_name?: string;
   agent_role?: 'buyer' | 'merchant' | 'auxiliary' | string;
@@ -196,15 +196,21 @@ export interface DemoCommerceResponse {
 
   // Provider Execution Summary
   provider_summary?: {
-    gemini_calls: number;
-    openrouter_calls?: number;
+    cerebras_calls?: number;
     groq_calls?: number;
+    gemini_calls: number;
+    nvidia_nim_calls?: number;
+    openrouter_calls?: number;
+    ollama_calls?: number;
     mock_calls: number;
     real_llm_calls?: number;
     deterministic_fallback_calls?: number;
+    deterministic_operations_avoided?: number;
+    estimated_llm_calls_saved?: number;
     fallback_count: number;
     all_agent_turns_used_real_llm?: boolean;
-    all_agent_turns_used_gemini: boolean;
+    all_agent_turns_used_gemini?: boolean;
+    is_live?: boolean;
   };
 }
 

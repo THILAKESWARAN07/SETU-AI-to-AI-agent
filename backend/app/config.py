@@ -36,25 +36,41 @@ class Settings:
     LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
     LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
+    # Priority & Gateway Settings
+    PRIMARY_LLM_PROVIDER: str = os.getenv("PRIMARY_LLM_PROVIDER", "cerebras")
+    LLM_PROVIDER_CHAIN: str = os.getenv("LLM_PROVIDER_CHAIN", "cerebras,groq,gemini,nvidia_nim,openrouter,ollama,mock")
+    CIRCUIT_BREAKER_COOLDOWN_SECONDS: float = float(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "60.0"))
+
     # Role-Specific LLM Settings (100% Free / Free-Tier Providers)
-    BUYER_LLM_PROVIDER: str = os.getenv("BUYER_LLM_PROVIDER", "gemini")
-    BUYER_LLM_MODEL: str = os.getenv("BUYER_LLM_MODEL", "gemini-3.1-flash-lite")
-    BUYER_LLM_FALLBACKS: str = os.getenv("BUYER_LLM_FALLBACKS", "openrouter,groq,mock")
+    BUYER_LLM_PROVIDER: str = os.getenv("BUYER_LLM_PROVIDER", "cerebras")
+    BUYER_LLM_MODEL: str = os.getenv("BUYER_LLM_MODEL", "llama3.1-70b")
+    BUYER_LLM_FALLBACKS: str = os.getenv("BUYER_LLM_FALLBACKS", "groq,gemini,nvidia_nim,openrouter,ollama,mock")
 
     MERCHANT_LLM_PROVIDER: str = os.getenv("MERCHANT_LLM_PROVIDER", "groq")
-    MERCHANT_LLM_MODEL: str = os.getenv("MERCHANT_LLM_MODEL", "llama-3.3-70b-versatile")
-    MERCHANT_LLM_FALLBACKS: str = os.getenv("MERCHANT_LLM_FALLBACKS", "openrouter,gemini,mock")
+    MERCHANT_LLM_MODEL: str = os.getenv("MERCHANT_LLM_MODEL", "groq/compound-mini")
+    MERCHANT_LLM_FALLBACKS: str = os.getenv("MERCHANT_LLM_FALLBACKS", "cerebras,gemini,nvidia_nim,openrouter,ollama,mock")
 
     AUXILIARY_LLM_PROVIDER: str = os.getenv("AUXILIARY_LLM_PROVIDER", "groq")
-    AUXILIARY_LLM_MODEL: str = os.getenv("AUXILIARY_LLM_MODEL", "llama-3.3-70b-versatile")
-    AUXILIARY_LLM_FALLBACKS: str = os.getenv("AUXILIARY_LLM_FALLBACKS", "gemini,openrouter,mock")
+    AUXILIARY_LLM_MODEL: str = os.getenv("AUXILIARY_LLM_MODEL", "groq/compound-mini")
+    AUXILIARY_LLM_FALLBACKS: str = os.getenv("AUXILIARY_LLM_FALLBACKS", "cerebras,gemini,nvidia_nim,openrouter,ollama,mock")
 
-    # API Keys & Models for Free Providers
-    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    # API Keys & Models for Free / Fast Providers
+    CEREBRAS_API_KEY: str = os.getenv("CEREBRAS_API_KEY", "")
+    CEREBRAS_MODEL: str = os.getenv("CEREBRAS_MODEL", "llama3.1-70b")
+
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "groq/compound-mini")
+
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    NVIDIA_NIM_API_KEY: str = os.getenv("NVIDIA_NIM_API_KEY", "")
+    NVIDIA_NIM_MODEL: str = os.getenv("NVIDIA_NIM_MODEL", "meta/llama-3.3-70b-instruct")
+
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
-    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "dots-studio/dots-3-note-preview:free")
+    
+    OLLAMA_ENABLED: bool = os.getenv("OLLAMA_ENABLED", "false").lower() in ("true", "1", "yes")
+    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
 
     # Security Token Signing Secret (for backend signed tokens if desired)
     SECRET_KEY: str = os.getenv("SECRET_KEY", "setu-trust-layer-secret-key-12938")
@@ -75,30 +91,47 @@ class Settings:
         self.RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "mockwebhooksecret123")
         self.IS_PAYMENT_TEST_MODE = os.getenv("IS_PAYMENT_TEST_MODE", "True").lower() in ("true", "1", "yes")
         
-        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
-        self.LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite")
+        self.PRIMARY_LLM_PROVIDER = os.getenv("PRIMARY_LLM_PROVIDER", "cerebras")
+        self.LLM_PROVIDER_CHAIN = os.getenv("LLM_PROVIDER_CHAIN", "cerebras,groq,gemini,nvidia_nim,openrouter,ollama,mock")
+        self.CIRCUIT_BREAKER_COOLDOWN_SECONDS = float(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "60.0"))
+
+        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "cerebras")
+        self.LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1-70b")
         self.LLM_API_KEY = os.getenv("LLM_API_KEY", "")
         self.LLM_FALLBACK_TO_MOCK = os.getenv("LLM_FALLBACK_TO_MOCK", "True").lower() in ("true", "1", "yes")
         self.LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
         self.LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
-        self.BUYER_LLM_PROVIDER = os.getenv("BUYER_LLM_PROVIDER", "gemini")
-        self.BUYER_LLM_MODEL = os.getenv("BUYER_LLM_MODEL", "gemini-3.1-flash-lite")
-        self.BUYER_LLM_FALLBACKS = os.getenv("BUYER_LLM_FALLBACKS", "openrouter,groq,mock")
+        self.BUYER_LLM_PROVIDER = os.getenv("BUYER_LLM_PROVIDER", "cerebras")
+        self.BUYER_LLM_MODEL = os.getenv("BUYER_LLM_MODEL", "llama3.1-70b")
+        self.BUYER_LLM_FALLBACKS = os.getenv("BUYER_LLM_FALLBACKS", "groq,gemini,nvidia_nim,openrouter,ollama,mock")
 
         self.MERCHANT_LLM_PROVIDER = os.getenv("MERCHANT_LLM_PROVIDER", "groq")
         self.MERCHANT_LLM_MODEL = os.getenv("MERCHANT_LLM_MODEL", "llama-3.3-70b-versatile")
-        self.MERCHANT_LLM_FALLBACKS = os.getenv("MERCHANT_LLM_FALLBACKS", "openrouter,gemini,mock")
+        self.MERCHANT_LLM_FALLBACKS = os.getenv("MERCHANT_LLM_FALLBACKS", "cerebras,gemini,nvidia_nim,openrouter,ollama,mock")
 
         self.AUXILIARY_LLM_PROVIDER = os.getenv("AUXILIARY_LLM_PROVIDER", "groq")
         self.AUXILIARY_LLM_MODEL = os.getenv("AUXILIARY_LLM_MODEL", "llama-3.3-70b-versatile")
-        self.AUXILIARY_LLM_FALLBACKS = os.getenv("AUXILIARY_LLM_FALLBACKS", "gemini,openrouter,mock")
+        self.AUXILIARY_LLM_FALLBACKS = os.getenv("AUXILIARY_LLM_FALLBACKS", "cerebras,gemini,nvidia_nim,openrouter,ollama,mock")
 
-        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+        self.CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
+        self.CEREBRAS_MODEL = os.getenv("CEREBRAS_MODEL", "llama3.1-70b")
+
         self.GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
         self.GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+        self.NVIDIA_NIM_API_KEY = os.getenv("NVIDIA_NIM_API_KEY", "")
+        self.NVIDIA_NIM_MODEL = os.getenv("NVIDIA_NIM_MODEL", "meta/llama-3.3-70b-instruct")
+
         self.OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
         self.OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+
+        self.OLLAMA_ENABLED = os.getenv("OLLAMA_ENABLED", "false").lower() in ("true", "1", "yes")
+        self.OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        self.OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+
         self.SECRET_KEY = os.getenv("SECRET_KEY", "setu-trust-layer-secret-key-12938")
 
         # Determine if valid Razorpay test credentials are present
