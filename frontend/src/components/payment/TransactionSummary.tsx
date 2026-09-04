@@ -19,7 +19,27 @@ export default function TransactionSummary({ transaction, result }: TransactionS
   };
 
   const discountAmount = parseFloat(result.original_amount) - parseFloat(result.final_amount);
-  const bundleName = result.bundle_offer?.name || "SoundWave Bundle Pack";
+
+  // Retrieve exact accepted proposal snapshot
+  const acceptedProposal = result.proposals?.find(p => p.proposal_id === result.accepted_proposal_id);
+
+  // Basket items strictly from accepted proposal snapshot or result.basket
+  const basketItems = (acceptedProposal?.basket_items && acceptedProposal.basket_items.length > 0)
+    ? acceptedProposal.basket_items
+    : (result.basket?.items && result.basket.items.length > 0)
+      ? result.basket.items
+      : [];
+
+  // Determine proposal type: STANDALONE_COUNTER vs BUNDLE_PROPOSAL
+  const proposalType = acceptedProposal?.proposal_type 
+    || (result.accepted_proposal_id?.includes('bundle') ? 'BUNDLE_PROPOSAL' : 'STANDALONE_COUNTER');
+  const isBundle = proposalType === 'BUNDLE_PROPOSAL' || (basketItems.length > 1 && !result.accepted_proposal_id?.includes('standalone'));
+
+  const sectionHeading = isBundle ? "PURCHASED BUNDLE" : "PURCHASED ITEM";
+  const primaryItem = basketItems.find((item: any) => item.is_primary) || basketItems[0];
+  const displayName = isBundle
+    ? (result.bundle_offer?.name || "SoundWave Bundle Pack")
+    : (primaryItem?.name || "Wireless Earbuds Pro");
 
   return (
     <div className="transaction-summary-card animate-fade-in">
@@ -33,13 +53,21 @@ export default function TransactionSummary({ transaction, result }: TransactionS
       </div>
 
       <div className="summary-body">
-        {/* Bundle Description */}
+        {/* Item or Bundle Details */}
         <div className="summary-section bundle-details">
-          <h4 className="section-label">Purchased Bundle</h4>
-          <p className="bundle-title text-main">{bundleName}</p>
+          <h4 className="section-label">{sectionHeading}</h4>
+          <p className="bundle-title text-main">{displayName}</p>
           <ul className="bundle-items font-mono">
-            <li>• Wireless Earbuds (Catalog ID: 1)</li>
-            <li>• Smart Charging Case (Catalog ID: 2)</li>
+            {basketItems.length > 0 ? (
+              basketItems.map((item: any, idx: number) => (
+                <li key={idx}>
+                  • {item.name || `Item (ID: ${item.product_id})`} (Catalog ID: {item.product_id})
+                  {item.quantity > 1 ? ` × ${item.quantity}` : ''}
+                </li>
+              ))
+            ) : (
+              <li>• {displayName} (Catalog ID: {result.selected_product_id || 1})</li>
+            )}
           </ul>
         </div>
 
@@ -53,6 +81,12 @@ export default function TransactionSummary({ transaction, result }: TransactionS
               <span className="id-lbl">PURCHASE REQ ID:</span>
               <span className="id-val text-white">PR-{result.purchase_request_id}</span>
             </div>
+            {result.accepted_proposal_id && (
+              <div className="id-item">
+                <span className="id-lbl">ACCEPTED PROPOSAL:</span>
+                <span className="id-val text-secondary">{result.accepted_proposal_id}</span>
+              </div>
+            )}
             <div className="id-item">
               <span className="id-lbl">RAZORPAY ORDER ID:</span>
               <span className="id-val text-white">{transaction.razorpay_order_id}</span>

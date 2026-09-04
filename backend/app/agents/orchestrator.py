@@ -1453,7 +1453,17 @@ class NegotiationOrchestrator:
                 result="SUCCESS",
                 reason="Purchase request logged successfully in system ledger.",
                 entity_type="PurchaseRequest",
-                entity_id=final_decision_pr_id
+                entity_id=final_decision_pr_id,
+                metadata={
+                    "purchase_request_id": final_decision_pr_id,
+                    "accepted_proposal_id": accepted_proposal_id,
+                    "proposal_type": accepted_prop.get("proposal_type") if accepted_prop else None,
+                    "basket": basket_dict,
+                    "original_amount": str(financials["catalog_total"]),
+                    "final_amount": str(financials["basket_total"]),
+                    "discount_percent": str(purchase_res["discount_percent"]),
+                    "margin_percent": str(purchase_res["margin_percent"]),
+                }
             )
             
             AuditEngine.log_event(

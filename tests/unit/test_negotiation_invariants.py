@@ -842,6 +842,230 @@ def test_buyer_acceptance_lineage_and_snapshot_harmony():
         db.close()
 
 
+def test_standalone_payment_snapshot_contains_only_accepted_item():
+    """
+    Regression Test 1:
+    When the buyer accepts a standalone proposal (prop_m_r2_standalone @ ₹1,499.00),
+    the payment snapshot, basket, PurchaseRequest, and database record MUST contain ONLY
+    the single accepted item (Wireless Earbuds Pro) and NEVER include the charging case.
+    """
+    db = SessionLocal()
+    try:
+        provider = MockProvider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        result = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_standalone_audit",
+            intent="I need wireless earbuds under ₹2,000.",
+            budget=Decimal("2000.00"),
+            max_rounds=4
+        )
+
+        assert result["accepted_proposal_id"] == "prop_m_r2_standalone"
+        assert Decimal(str(result["final_amount"])) == Decimal("1499.00")
+
+        # Verify accepted proposal snapshot
+        accepted_proposal = next(p for p in result["proposals"] if p["proposal_id"] == "prop_m_r2_standalone")
+        assert accepted_proposal["proposal_type"] == "STANDALONE_COUNTER"
+        assert len(accepted_proposal["basket_items"]) == 1
+        assert accepted_proposal["basket_items"][0]["product_id"] == 1
+        assert Decimal(str(accepted_proposal["basket_items"][0]["negotiated_price"])) == Decimal("1499.00")
+
+        # Verify result basket items
+        basket_items = result["basket"]["items"]
+        assert len(basket_items) == 1
+        assert basket_items[0]["product_id"] == 1
+        assert "Wireless Earbuds" in basket_items[0]["name"]
+        assert Decimal(str(basket_items[0]["negotiated_price"])) == Decimal("1499.00")
+        assert all(item["product_id"] != 2 for item in basket_items), "Charging case (ID 2) leaked into standalone basket!"
+
+        # Verify PurchaseRequest in DB
+        from backend.app.models import PurchaseRequest
+        pr = db.query(PurchaseRequest).filter(PurchaseRequest.id == result["purchase_request_id"]).first()
+        assert pr is not None
+        assert Decimal(str(pr.final_amount)) == Decimal("1499.00")
+        assert pr.basket is not None
+        assert len(pr.basket["items"]) == 1
+        assert pr.basket["items"][0]["product_id"] == 1
+        assert all(item["product_id"] != 2 for item in pr.basket["items"])
+    finally:
+        db.close()
+
+
+def test_bundle_payment_snapshot_contains_all_accepted_items():
+    """
+    Regression Test 2:
+    When a bundle proposal is accepted (prop_m_r2_bundle @ ₹1,899.00),
+    the payment snapshot and basket MUST contain ALL bundled items (Earbuds + Charging Case).
+    """
+    db = SessionLocal()
+    try:
+        provider = MockProvider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        # Buyer specifically requests bundle / accessories
+        result = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_bundle_audit",
+            intent="I want a complete bundle of wireless earbuds with charging case under ₹2,000.",
+            budget=Decimal("2000.00"),
+            max_rounds=4
+        )
+
+        assert result["decision"] == "APPROVED"
+        assert len(result["basket"]["items"]) == 2
+        item_ids = [item["product_id"] for item in result["basket"]["items"]]
+        assert 1 in item_ids
+        assert 2 in item_ids
+        assert Decimal(str(result["final_amount"])) == Decimal("1899.00")
+
+        # Verify PurchaseRequest in DB
+        from backend.app.models import PurchaseRequest
+        pr = db.query(PurchaseRequest).filter(PurchaseRequest.id == result["purchase_request_id"]).first()
+        assert pr is not None
+        assert Decimal(str(pr.final_amount)) == Decimal("1899.00")
+        assert len(pr.basket["items"]) == 2
+    finally:
+        db.close()
+
+
+def test_unaccepted_bundle_never_leaks_into_purchase_request():
+    """
+    Regression Test 3:
+    When the merchant presents both a standalone counter and an optional bundle proposal,
+    and the buyer accepts ONLY the standalone counter, the optional bundle data
+    must NEVER leak into PurchaseRequest, database basket, or payment snapshot.
+    """
+    db = SessionLocal()
+    try:
+        provider = MockProvider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        events = []
+        result = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_isolation_audit",
+            intent="I need wireless earbuds under ₹2,000.",
+            budget=Decimal("2000.00"),
+            max_rounds=4,
+            on_event=lambda ev: events.append(ev)
+        )
+
+        # 1. Verify merchant did offer an optional bundle in events
+        merchant_counter_events = [e for e in events if e.get("actor") == "merchant" and e.get("bundle_proposal")]
+        assert len(merchant_counter_events) >= 1
+        bundle_prop = merchant_counter_events[0]["bundle_proposal"]
+        assert bundle_prop["proposal_id"] == "prop_m_r2_bundle"
+        assert Decimal(str(bundle_prop["offered_amount"])) == Decimal("1899.00")
+
+        # 2. Verify accepted proposal was the standalone offer
+        assert result["accepted_proposal_id"] == "prop_m_r2_standalone"
+        assert result["accepted_proposal_id"] != bundle_prop["proposal_id"]
+
+        # 3. Verify zero bundle leakage in result basket
+        assert len(result["basket"]["items"]) == 1
+        assert result["basket"]["items"][0]["product_id"] == 1
+        assert Decimal(str(result["basket"]["final_total"])) == Decimal("1499.00")
+
+        # 4. Verify zero bundle leakage in DB PurchaseRequest
+        from backend.app.models import PurchaseRequest
+        pr = db.query(PurchaseRequest).filter(PurchaseRequest.id == result["purchase_request_id"]).first()
+        assert pr is not None
+        assert Decimal(str(pr.final_amount)) == Decimal("1499.00")
+        pr_item_ids = [item["product_id"] for item in pr.basket["items"]]
+        assert pr_item_ids == [1]
+        assert 2 not in pr_item_ids
+    finally:
+        db.close()
+
+
+def test_payment_page_data_matches_accepted_proposal_snapshot():
+    """
+    Regression Test 4:
+    Verify that the data payload delivered for the payment page strictly matches
+    the accepted immutable proposal snapshot in proposals registry.
+    """
+    db = SessionLocal()
+    try:
+        provider = MockProvider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        result = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_snapshot_match_audit",
+            intent="I need wireless earbuds under ₹2,000.",
+            budget=Decimal("2000.00"),
+            max_rounds=4
+        )
+
+        accepted_id = result["accepted_proposal_id"]
+        proposals_dict = {p["proposal_id"]: p for p in result["proposals"]}
+        assert accepted_id in proposals_dict
+
+        accepted_snap = proposals_dict[accepted_id]
+        assert accepted_snap["status"] == "ACCEPTED"
+        assert Decimal(str(accepted_snap["total_amount"])) == Decimal(str(result["final_amount"]))
+        assert len(accepted_snap["basket_items"]) == len(result["basket"]["items"])
+
+        for snap_item, res_item in zip(accepted_snap["basket_items"], result["basket"]["items"]):
+            assert snap_item["product_id"] == res_item["product_id"]
+            assert snap_item["name"] == res_item["name"]
+            assert Decimal(str(snap_item["negotiated_price"])) == Decimal(str(res_item["negotiated_price"]))
+            assert snap_item["quantity"] == res_item["quantity"]
+    finally:
+        db.close()
+
+
+def test_proposal_type_controls_payment_snapshot_label():
+    """
+    Regression Test 5:
+    Verify proposal_type metadata integrity:
+    - Standalone proposal has proposal_type == 'STANDALONE_COUNTER'
+    - Bundle proposal has proposal_type == 'BUNDLE_PROPOSAL'
+    - This deterministic field controls whether the UI renders 'PURCHASED ITEM' or 'PURCHASED BUNDLE'.
+    """
+    db = SessionLocal()
+    try:
+        provider = MockProvider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        result = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_label_audit",
+            intent="I need wireless earbuds under ₹2,000.",
+            budget=Decimal("2000.00"),
+            max_rounds=4
+        )
+
+        proposals = result["proposals"]
+        standalone_props = [p for p in proposals if p["proposal_id"] == "prop_m_r2_standalone"]
+        bundle_props = [p for p in proposals if p["proposal_id"] == "prop_m_r2_bundle"]
+
+        assert len(standalone_props) == 1
+        assert standalone_props[0]["proposal_type"] == "STANDALONE_COUNTER"
+        # Standalone proposal type indicates "PURCHASED ITEM"
+        assert len(standalone_props[0]["basket_items"]) == 1
+
+        assert len(bundle_props) == 1
+        assert bundle_props[0]["proposal_type"] == "BUNDLE_PROPOSAL"
+        # Bundle proposal type indicates "PURCHASED BUNDLE"
+        assert len(bundle_props[0]["basket_items"]) == 2
+
+        # In this flow, buyer accepted standalone counter
+        assert result["accepted_proposal_id"] == "prop_m_r2_standalone"
+        accepted = next(p for p in proposals if p["proposal_id"] == result["accepted_proposal_id"])
+        assert accepted["proposal_type"] == "STANDALONE_COUNTER"
+    finally:
+        db.close()
+
+
+
 
 
 

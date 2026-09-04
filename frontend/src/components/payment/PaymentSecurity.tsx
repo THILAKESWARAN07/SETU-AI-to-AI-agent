@@ -15,7 +15,7 @@ export default function PaymentSecurity() {
     },
     {
       title: 'Merchant Pricing Boundary',
-      desc: 'Margins (34.18%) and discounts (4.95%) verified deterministically.',
+      desc: 'Profit margins and discount bounds verified deterministically.',
       icon: <Layers className="sec-icon success" />
     },
     {

@@ -108,10 +108,18 @@ export default function TransactionDetails() {
   const policyEvt = activeEvents.find(e => e.action === 'EVALUATE_POLICY');
   const purchaseRequestEvt = activeEvents.find(e => e.action === 'PURCHASE_REQUEST');
 
-  const discountPercent = policyEvt?.metadata?.discount_percent || purchaseRequestEvt?.metadata?.proposal?.discount_percent || '0.00';
-  const marginPercent = policyEvt?.metadata?.margin_percent || purchaseRequestEvt?.metadata?.proposal?.margin_percent || '0.00';
+  const discountPercent = policyEvt?.metadata?.discount_percent || purchaseRequestEvt?.metadata?.discount_percent || purchaseRequestEvt?.metadata?.proposal?.discount_percent || '0.00';
+  const marginPercent = policyEvt?.metadata?.margin_percent || purchaseRequestEvt?.metadata?.margin_percent || purchaseRequestEvt?.metadata?.proposal?.margin_percent || '0.00';
   const policyVersion = policyEvt?.policy_version || 'v1.0.0';
-  const bundleName = "SoundWave Bundle Pack (Earbuds + Charging Case)";
+
+  const basketData = purchaseRequestEvt?.metadata?.basket;
+  const proposalType = purchaseRequestEvt?.metadata?.proposal_type || (basketData?.items?.length > 1 ? 'BUNDLE_PROPOSAL' : 'STANDALONE_COUNTER');
+  const isBundle = proposalType === 'BUNDLE_PROPOSAL' || (basketData?.items && basketData.items.length > 1);
+
+  const primaryItemName = basketData?.items?.find((i: any) => i.is_primary)?.name || basketData?.items?.[0]?.name || "Wireless Earbuds Pro";
+  const itemDescription = isBundle
+    ? (purchaseRequestEvt?.metadata?.bundle_name || "SoundWave Bundle Pack (Earbuds + Charging Case)")
+    : primaryItemName;
 
   const finalApprovedAmount = transaction.amount;
   let originalAmount = policyEvt?.metadata?.original_amount || purchaseRequestEvt?.metadata?.proposal?.original_amount;
@@ -231,8 +239,8 @@ export default function TransactionDetails() {
             </div>
             <div className="details-card-body font-mono">
               <div className="detail-row">
-                <span className="detail-lbl">Bundle Description:</span>
-                <span className="detail-val text-white">{bundleName}</span>
+                <span className="detail-lbl">{isBundle ? 'Purchased Bundle:' : 'Purchased Item:'}</span>
+                <span className="detail-val text-white">{itemDescription}</span>
               </div>
               <div className="detail-row">
                 <span className="detail-lbl">Original Catalog Amount:</span>
