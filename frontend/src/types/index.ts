@@ -126,8 +126,14 @@ export interface ConversationEvent {
   event_type?: 'message' | 'counter_offer' | 'bundle_offer' | 'acceptance' | 'trust_check' | 'rejection' | string;
   type?: 'buyer_message' | 'merchant_message' | 'system_event' | 'complete' | 'error' | string;
   state?: string;
+  proposal_id?: string;
+  proposal_type?: string;
+  accepted_proposal_id?: string;
   message: string;
   offer?: string | number;
+  standalone_counter?: string | number;
+  bundle_proposal?: any;
+  optional_bundle_items?: any[];
   basket_items?: any[];
   strategy?: string;
   reason_label?: string;
@@ -153,6 +159,13 @@ export interface DemoCommerceResponse {
   margin_percent: string;
   policy_version: string;
   basket?: any;
+  
+  // Proposal and Offer Lifecycle
+  buyer_opening_offer?: any;
+  merchant_standalone_counter?: any;
+  merchant_bundle_proposal?: any;
+  proposals?: any[];
+  accepted_proposal_id?: string;
   
   // Step 10 dynamic params
   agent_mode?: string;

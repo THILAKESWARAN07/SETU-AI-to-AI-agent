@@ -48,6 +48,12 @@ interface ChatMessage {
   reasonLabel?: string;
   strategy?: string;
   eventType?: string;
+  proposalType?: string;
+  proposalId?: string;
+  acceptedProposalId?: string;
+  standaloneCounter?: string;
+  bundleProposal?: any;
+  optionalBundleItems?: any[];
   timestamp: string;
   basketItems?: any[];
   isFinal?: boolean;
@@ -75,6 +81,12 @@ const mapEventToMessage = (evt: ConversationEvent, idx: number): ChatMessage => 
     reasonLabel: evt.reason_label,
     strategy: evt.strategy,
     eventType: evt.event_type || evt.type,
+    proposalType: evt.proposal_type,
+    proposalId: evt.proposal_id,
+    acceptedProposalId: evt.accepted_proposal_id,
+    standaloneCounter: evt.standalone_counter ? String(evt.standalone_counter) : undefined,
+    bundleProposal: evt.bundle_proposal,
+    optionalBundleItems: evt.optional_bundle_items,
     timestamp: evt.timestamp || formatISTTime(idx * 0.4),
     basketItems: evt.basket_items,
     isFinal: evt.is_final
@@ -95,11 +107,13 @@ export default function Negotiation() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [thinkingAgent, setThinkingAgent] = useState<'BUYER' | 'MERCHANT' | null>(null);
 
-  // Live price trackers
+  // Live price trackers - cleanly distinguish opening offer from counters & bundles
   const [liveCatalogPrice, setLiveCatalogPrice] = useState<number>(0);
-  const [liveBuyerOffer, setLiveBuyerOffer] = useState<number | null>(null);
-  const [liveMerchantCounter, setLiveMerchantCounter] = useState<number | null>(null);
+  const [liveBuyerOpeningOffer, setLiveBuyerOpeningOffer] = useState<number | null>(null);
+  const [liveMerchantStandaloneCounter, setLiveMerchantStandaloneCounter] = useState<number | null>(null);
+  const [liveMerchantBundleProposal, setLiveMerchantBundleProposal] = useState<number | null>(null);
   const [liveFinalPrice, setLiveFinalPrice] = useState<number | null>(null);
+  const [liveFinalBasketDesc, setLiveFinalBasketDesc] = useState<string | null>(null);
 
   // Progressive elapsed timer
   const [elapsed, setElapsed] = useState(0);
@@ -113,9 +127,11 @@ export default function Negotiation() {
     setError(null);
     setResult(null);
     setMessages([]);
-    setLiveBuyerOffer(null);
-    setLiveMerchantCounter(null);
+    setLiveBuyerOpeningOffer(null);
+    setLiveMerchantStandaloneCounter(null);
+    setLiveMerchantBundleProposal(null);
     setLiveFinalPrice(null);
+    setLiveFinalBasketDesc(null);
     setThinkingAgent('BUYER');
     setElapsed(0);
 
@@ -142,13 +158,23 @@ export default function Negotiation() {
           return [...prev, newMsg];
         });
 
-        // Update live pricing progression
-        if (evt.actor === 'buyer' && evt.offer && parseFloat(String(evt.offer)) > 0) {
-          setLiveBuyerOffer(parseFloat(String(evt.offer)));
+        // Update live pricing progression accurately
+        if (evt.actor === 'buyer') {
+          if (evt.offer && parseFloat(String(evt.offer)) > 0) {
+            // Only set opening offer if not yet recorded
+            setLiveBuyerOpeningOffer((prev) => (prev === null ? parseFloat(String(evt.offer)) : prev));
+          }
           setThinkingAgent('MERCHANT');
           setPhase('NEGOTIATING');
-        } else if (evt.actor === 'merchant' && evt.offer && parseFloat(String(evt.offer)) > 0) {
-          setLiveMerchantCounter(parseFloat(String(evt.offer)));
+        } else if (evt.actor === 'merchant') {
+          if (evt.standalone_counter && parseFloat(String(evt.standalone_counter)) > 0) {
+            setLiveMerchantStandaloneCounter(parseFloat(String(evt.standalone_counter)));
+          } else if (evt.offer && parseFloat(String(evt.offer)) > 0) {
+            setLiveMerchantStandaloneCounter(parseFloat(String(evt.offer)));
+          }
+          if (evt.bundle_proposal && evt.bundle_proposal.offered_amount) {
+            setLiveMerchantBundleProposal(parseFloat(String(evt.bundle_proposal.offered_amount)));
+          }
           setThinkingAgent('BUYER');
           setPhase('NEGOTIATING');
         } else if (evt.actor === 'setu') {
@@ -167,6 +193,20 @@ export default function Negotiation() {
         const finAmt = parseFloat(finalRes.final_amount || '0');
         if (origAmt > 0) setLiveCatalogPrice(origAmt);
         if (finAmt > 0) setLiveFinalPrice(finAmt);
+
+        if (finalRes.buyer_opening_offer?.offered_amount) {
+          setLiveBuyerOpeningOffer(parseFloat(String(finalRes.buyer_opening_offer.offered_amount)));
+        }
+        if (finalRes.merchant_standalone_counter?.offered_amount) {
+          setLiveMerchantStandaloneCounter(parseFloat(String(finalRes.merchant_standalone_counter.offered_amount)));
+        }
+        if (finalRes.merchant_bundle_proposal?.offered_amount) {
+          setLiveMerchantBundleProposal(parseFloat(String(finalRes.merchant_bundle_proposal.offered_amount)));
+        }
+        if (finalRes.basket?.items) {
+          const names = finalRes.basket.items.map((i: any) => i.name).join(' + ');
+          setLiveFinalBasketDesc(names);
+        }
 
         if (finalRes.decision === 'APPROVED') {
           setPhase('APPROVED');
@@ -196,6 +236,20 @@ export default function Negotiation() {
             if (origAmt > 0) setLiveCatalogPrice(origAmt);
             if (finAmt > 0) setLiveFinalPrice(finAmt);
 
+            if (fallbackRes.buyer_opening_offer?.offered_amount) {
+              setLiveBuyerOpeningOffer(parseFloat(String(fallbackRes.buyer_opening_offer.offered_amount)));
+            }
+            if (fallbackRes.merchant_standalone_counter?.offered_amount) {
+              setLiveMerchantStandaloneCounter(parseFloat(String(fallbackRes.merchant_standalone_counter.offered_amount)));
+            }
+            if (fallbackRes.merchant_bundle_proposal?.offered_amount) {
+              setLiveMerchantBundleProposal(parseFloat(String(fallbackRes.merchant_bundle_proposal.offered_amount)));
+            }
+            if (fallbackRes.basket?.items) {
+              const names = fallbackRes.basket.items.map((i: any) => i.name).join(' + ');
+              setLiveFinalBasketDesc(names);
+            }
+
             if (fallbackRes.decision === 'APPROVED') {
               setPhase('APPROVED');
             } else if (fallbackRes.decision === 'REQUIRES_APPROVAL') {
@@ -223,6 +277,19 @@ export default function Negotiation() {
       const finAmt = parseFloat(initialResult.final_amount || '0');
       if (origAmt > 0) setLiveCatalogPrice(origAmt);
       if (finAmt > 0) setLiveFinalPrice(finAmt);
+      if (initialResult.buyer_opening_offer?.offered_amount) {
+        setLiveBuyerOpeningOffer(parseFloat(String(initialResult.buyer_opening_offer.offered_amount)));
+      }
+      if (initialResult.merchant_standalone_counter?.offered_amount) {
+        setLiveMerchantStandaloneCounter(parseFloat(String(initialResult.merchant_standalone_counter.offered_amount)));
+      }
+      if (initialResult.merchant_bundle_proposal?.offered_amount) {
+        setLiveMerchantBundleProposal(parseFloat(String(initialResult.merchant_bundle_proposal.offered_amount)));
+      }
+      if (initialResult.basket?.items) {
+        const names = initialResult.basket.items.map((i: any) => i.name).join(' + ');
+        setLiveFinalBasketDesc(names);
+      }
       setPhase(initialResult.decision === 'APPROVED' ? 'APPROVED' : initialResult.decision === 'REQUIRES_APPROVAL' ? 'REQUIRES_APPROVAL' : 'REJECTED');
       return;
     }
@@ -363,7 +430,7 @@ export default function Negotiation() {
         <div className="negotiation-main-col">
           
           {/* Price Progression Tracker */}
-          <div className="price-progression-bar">
+          <div className="price-progression-bar" style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', justifyContent: 'space-between' }}>
             <div className="price-step-item">
               <span className="price-step-label">Catalog List</span>
               <span className="price-step-val">
@@ -372,24 +439,40 @@ export default function Negotiation() {
             </div>
             <ArrowRight className="price-step-arrow" />
             <div className="price-step-item">
-              <span className="price-step-label">Buyer Offer</span>
+              <span className="price-step-label">Buyer Opening</span>
               <span className="price-step-val" style={{ color: '#60a5fa' }}>
-                {liveBuyerOffer !== null && liveBuyerOffer > 0 ? `₹${liveBuyerOffer.toLocaleString('en-IN')}` : 'Pending...'}
+                {liveBuyerOpeningOffer !== null && liveBuyerOpeningOffer > 0 ? `₹${liveBuyerOpeningOffer.toLocaleString('en-IN')}` : 'Pending...'}
               </span>
             </div>
             <ArrowRight className="price-step-arrow" />
             <div className="price-step-item">
-              <span className="price-step-label">Merchant Counter</span>
+              <span className="price-step-label">Merchant Standalone</span>
               <span className="price-step-val" style={{ color: '#fbbf24' }}>
-                {liveMerchantCounter !== null && liveMerchantCounter > 0 ? `₹${liveMerchantCounter.toLocaleString('en-IN')}` : isNegotiating ? 'Evaluating...' : '—'}
+                {liveMerchantStandaloneCounter !== null && liveMerchantStandaloneCounter > 0 ? `₹${liveMerchantStandaloneCounter.toLocaleString('en-IN')}` : isNegotiating ? 'Evaluating...' : '—'}
               </span>
             </div>
+            {liveMerchantBundleProposal !== null && liveMerchantBundleProposal > 0 && (
+              <>
+                <ArrowRight className="price-step-arrow" />
+                <div className="price-step-item">
+                  <span className="price-step-label">Optional Bundle</span>
+                  <span className="price-step-val" style={{ color: '#a78bfa' }}>
+                    {`₹${liveMerchantBundleProposal.toLocaleString('en-IN')}`}
+                  </span>
+                </div>
+              </>
+            )}
             <ArrowRight className="price-step-arrow" />
             <div className="price-step-item">
               <span className="price-step-label">Agreed Final</span>
               <span className={`price-step-val ${isDealApproved ? 'highlight-green' : isDealBlocked ? 'highlight-red' : ''}`}>
                 {isDealApproved && liveFinalPrice ? `₹${liveFinalPrice.toLocaleString('en-IN')}` : isDealRequiresApproval && liveFinalPrice ? `₹${liveFinalPrice.toLocaleString('en-IN')} (Pending)` : isDealBlocked ? 'BLOCKED' : 'Pending...'}
               </span>
+              {liveFinalBasketDesc && (
+                <span style={{ fontSize: '0.68rem', color: 'var(--text-dimmed)', marginTop: '2px', display: 'block', maxWidth: '140px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={liveFinalBasketDesc}>
+                  {liveFinalBasketDesc}
+                </span>
+              )}
             </div>
           </div>
 
@@ -441,6 +524,11 @@ export default function Negotiation() {
                         {msg.round && (
                           <span className="chat-round-badge">Round {msg.round}</span>
                         )}
+                        {msg.proposalType && (
+                          <span className="font-mono" style={{ fontSize: '0.68rem', padding: '2px 8px', borderRadius: '4px', background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)', border: '1px solid var(--border-color)' }}>
+                            {msg.proposalType.replace('_', ' ')}
+                          </span>
+                        )}
                       </div>
 
                       {stratLabel && (
@@ -452,11 +540,63 @@ export default function Negotiation() {
 
                       <p className="chat-bubble-message">{msg.message}</p>
 
-                      {/* Bundle proposal breakdown if accessories included */}
-                      {msg.basketItems && msg.basketItems.length > 1 && (
+                      {/* Options Presentation for Merchant Bundle Counter */}
+                      {msg.sender === 'MERCHANT_AGENT' && (msg.bundleProposal || msg.optionalBundleItems) && (
+                        <div className="bundle-proposal-card animate-fade-in" style={{ marginTop: '12px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.1)', borderRadius: '8px', padding: '12px' }}>
+                          <div style={{ marginBottom: '10px', fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span>📋 PROPOSAL OPTIONS</span>
+                          </div>
+                          
+                          {/* Option 1: Standalone */}
+                          <div style={{ padding: '8px 10px', background: 'rgba(0,0,0,0.25)', borderRadius: '6px', marginBottom: '8px', border: '1px solid rgba(96, 165, 250, 0.2)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#60a5fa' }}>OPTION 1 — STANDALONE</span>
+                                <span style={{ fontSize: '0.68rem', padding: '1px 5px', borderRadius: '4px', background: 'rgba(96, 165, 250, 0.15)', color: '#93c5fd', fontFamily: 'var(--font-mono)' }}>
+                                  {msg.proposalId || 'prop_m_r2_standalone'}
+                                </span>
+                              </div>
+                              <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#fbbf24', fontFamily: 'var(--font-mono)' }}>
+                                ₹{parseFloat(msg.standaloneCounter || msg.amount || '0').toLocaleString('en-IN')}
+                              </span>
+                            </div>
+                            <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', display: 'block', marginTop: '2px' }}>
+                              {msg.basketItems && msg.basketItems[0] ? msg.basketItems[0].name : 'Primary Item'} (1 item)
+                            </span>
+                          </div>
+
+                          {/* Option 2: Optional Bundle */}
+                          {msg.bundleProposal && (
+                            <div style={{ padding: '8px 10px', background: 'rgba(167, 139, 250, 0.08)', borderRadius: '6px', border: '1px solid rgba(167, 139, 250, 0.25)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#a78bfa' }}>OPTION 2 — OPTIONAL BUNDLE</span>
+                                  <span style={{ fontSize: '0.68rem', padding: '1px 5px', borderRadius: '4px', background: 'rgba(167, 139, 250, 0.2)', color: '#c4b5fd', fontFamily: 'var(--font-mono)' }}>
+                                    {msg.bundleProposal.proposal_id || 'prop_m_r2_bundle'}
+                                  </span>
+                                </div>
+                                <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#a78bfa', fontFamily: 'var(--font-mono)' }}>
+                                  ₹{parseFloat(msg.bundleProposal.offered_amount || '0').toLocaleString('en-IN')}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                {msg.bundleProposal.basket_items ? msg.bundleProposal.basket_items.map((i: any) => i.name).join(' + ') : 'Primary + Accessory'}
+                                {msg.bundleProposal.savings && parseFloat(msg.bundleProposal.savings) > 0 && (
+                                  <span style={{ color: '#10b981', marginLeft: '6px', fontWeight: 600 }}>
+                                    (Save ₹{parseFloat(msg.bundleProposal.savings).toLocaleString('en-IN')})
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Standalone or Generic Basket breakdown if accessories included and not already shown */}
+                      {msg.basketItems && msg.basketItems.length > 1 && !(msg.sender === 'MERCHANT_AGENT' && msg.bundleProposal) && (
                         <div className="bundle-proposal-card animate-fade-in">
                           <div className="bundle-card-header">
-                            <span className="bundle-card-title">📦 Merchant Strategic Bundle Proposal</span>
+                            <span className="bundle-card-title">📦 Basket Package Items</span>
                           </div>
                           <div className="bundle-items-list">
                             {msg.basketItems.map((bItem: any, bIdx: number) => {
@@ -482,8 +622,8 @@ export default function Negotiation() {
 
                       <div className="chat-bubble-footer">
                         {msg.amount && (
-                          <span className={`chat-price-pill ${isDealMsg ? 'deal-pill' : isBuyer ? 'buyer-pill' : 'merchant-pill'}`}>
-                            {isBuyer ? 'Bid: ' : isDealMsg ? 'Agreed: ' : 'Counter: '}₹{parseFloat(msg.amount).toLocaleString('en-IN')}
+                          <span className={`chat-price-pill ${isDealMsg ? 'deal-pill' : isBuyer ? 'buyer-pill' : (msg.proposalType === 'HOLD_PREVIOUS_OFFER' || msg.strategy === 'HOLD_PRICE') ? 'hold-pill' : 'merchant-pill'}`}>
+                            {isBuyer ? 'Bid: ' : isDealMsg ? 'Agreed: ' : (msg.proposalType === 'HOLD_PREVIOUS_OFFER' || msg.strategy === 'HOLD_PRICE') ? 'Held Offer: ' : 'Counter: '}₹{parseFloat(msg.amount).toLocaleString('en-IN')}
                           </span>
                         )}
                         {msg.reasonLabel && (

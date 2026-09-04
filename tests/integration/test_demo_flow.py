@@ -16,7 +16,7 @@ def test_demo_bundle_flow_auto_approved(client: TestClient, db):
     eval_res = client.post("/api/policy/evaluate?product_id=3&quantity=1&proposed_price=1899.00&buyer_budget=2000.00").json()
     assert eval_res["decision"] == "APPROVED"
     assert float(eval_res["discount_percent"]) == pytest_approx(4.95495, abs=1e-3)
-    assert float(eval_res["calculated_margin_percent"]) == pytest_approx(34.176, abs=1e-3)
+    assert float(eval_res["calculated_margin_percent"]) == pytest_approx(31.5429, abs=1e-3)
 
     # 2. Submit purchase request with full snapshot details
     req_data = {

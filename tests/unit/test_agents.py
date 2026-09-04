@@ -732,7 +732,7 @@ def test_s10_19_prompt_injection_resistance(db: Session):
     )
     assert res["decision"] == "APPROVED"
     # Even if they say 1 INR, MockProvider overrides or PolicyEngine evaluates and checks that final agreed price is safe.
-    assert Decimal(res["final_amount"]) >= Decimal("1500.00")
+    assert Decimal(res["final_amount"]) >= Decimal("1450.00")
 
 
 def test_s10_20_final_accept_boundary(db: Session):

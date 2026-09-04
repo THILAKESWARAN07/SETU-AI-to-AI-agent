@@ -43,7 +43,7 @@ def test_complete_e2e_commerce_flow(client: TestClient, db, monkeypatch):
     # 1. Trigger Orchestrated Commerce Flow
     req_data = {
         "buyer_id": "buyer_agent_alpha",
-        "intent": "I need wireless earbuds under ₹2,000."
+        "intent": "I need wireless earbuds bundle under ₹2,000."
     }
     
     response = client.post("/api/demo/commerce", json=req_data)
