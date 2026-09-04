@@ -213,6 +213,75 @@ export const apiService = {
     });
   },
 
+  async streamDemoCommerceFlow(
+    request: DemoCommerceRequest,
+    onEvent: (event: any) => void
+  ): Promise<DemoCommerceResponse> {
+    const url = `${API_BASE_URL}/api/demo/commerce/stream`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache',
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      throw new ApiError(
+        `Streaming request failed with status ${response.status}`,
+        response.status,
+        response.statusText
+      );
+    }
+
+    if (!response.body) {
+      throw new ApiError('No response body received from stream', response.status);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let finalResult: DemoCommerceResponse | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(trimmed.slice(6));
+            if (data.type === 'complete' || data.event_type === 'COMPLETE') {
+              finalResult = data.result;
+            } else if (data.type === 'error' || data.event_type === 'ERROR') {
+              if (data.result) {
+                finalResult = data.result;
+              }
+              throw new ApiError(data.error || 'Negotiation stream error');
+            } else {
+              onEvent(data);
+            }
+          } catch (e) {
+            if (e instanceof ApiError) throw e;
+            console.warn('Failed to parse SSE line:', trimmed, e);
+          }
+        }
+      }
+    }
+
+    if (!finalResult) {
+      throw new ApiError('Negotiation ended without completion event.');
+    }
+
+    return finalResult;
+  },
+
   // --- ATTACK TEST SIMULATOR ---
   async simulateAttack(request: AttackTestRequest): Promise<AttackTestResponse> {
     return fetchJson<AttackTestResponse>('/api/attack-test', {

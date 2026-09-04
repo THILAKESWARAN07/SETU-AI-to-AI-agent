@@ -270,3 +270,203 @@ def test_demo_commerce_api_returns_conversation_events(client: TestClient, db: S
     assert "conversation_events" in data
     assert len(data["conversation_events"]) > 0
     assert data["decision"] in ["APPROVED", "REQUIRES_APPROVAL"]
+
+# 13. FallbackProvider automatically catches primary provider errors and completes multi-turn negotiation
+def test_fallback_provider_handles_primary_failure(db: Session):
+    from backend.app.agents.provider import FallbackProvider, LLMProvider
+    
+    class FailingProvider(LLMProvider):
+        @property
+        def agent_mode(self) -> str:
+            return "FAILING_PROVIDER"
+        @property
+        def provider_name(self) -> str:
+            return "FailingProvider"
+        @property
+        def model_name(self) -> str:
+            return "fail-v1"
+        def generate_response(self, prompt, system_instruction, tools):
+            raise RuntimeError("429 Resource has been exhausted (quota limit reached)")
+        def generate_structured_response(self, prompt, system_instruction, schema_class):
+            raise RuntimeError("429 Resource has been exhausted (quota limit reached)")
+
+    failing = FailingProvider()
+    fallback_provider = FallbackProvider(primary=failing, fallback=MockProvider(), timeout_seconds=1.0)
+
+    buyer = BuyerAgent(fallback_provider)
+    merchant = MerchantAgent(fallback_provider)
+    orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+    res = orchestrator.run_negotiation_loop(
+        buyer_id="fallback_buyer",
+        intent="I want wireless earbuds under ₹2,000.",
+        budget=Decimal("2000.00"),
+        max_rounds=4
+    )
+
+    assert fallback_provider.fallback_active is True
+    assert "Resource has been exhausted" in fallback_provider.fallback_error
+    assert res["decision"] == "APPROVED"
+    assert len(res["conversation_events"]) >= 5
+    assert Decimal(res["final_amount"]) > Decimal("0")
+
+# 14. SSE Stream endpoint yields structured events progressively and terminates cleanly
+def test_sse_stream_yields_events_and_terminates(client: TestClient, db: Session):
+    import json
+    req_data = {
+        "buyer_id": "stream_buyer",
+        "intent": "I want wireless earbuds under ₹2,000.",
+        "budget": 2000.00
+    }
+    with client.stream("POST", "/api/demo/commerce/stream", json=req_data) as response:
+        assert response.status_code == 200
+        events = []
+        for line in response.iter_lines():
+            if line.startswith("data: "):
+                payload = json.loads(line[6:])
+                events.append(payload)
+
+    assert len(events) >= 5
+    # The last event must be COMPLETE
+    complete_event = next((e for e in events if e.get("type") == "complete" or e.get("event_type") == "COMPLETE"), None)
+    assert complete_event is not None
+    assert complete_event["result"]["decision"] == "APPROVED"
+
+# 15. Sequence numbers in conversation_events are strictly 1-indexed and monotonic
+def test_conversation_events_sequence_numbers_are_strictly_ordered(db: Session):
+    provider = MockProvider()
+    buyer = BuyerAgent(provider)
+    merchant = MerchantAgent(provider)
+    orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+    res = orchestrator.run_negotiation_loop(
+        buyer_id="test_buyer_seq",
+        intent="I want Samsung Galaxy A15 with budget 15000.",
+        budget=Decimal("15000.00"),
+        max_rounds=4
+    )
+
+    events = res["conversation_events"]
+    assert len(events) > 0
+    for idx, evt in enumerate(events):
+        assert evt["sequence"] == idx + 1
+        assert "event_id" in evt
+        assert "actor" in evt
+        assert "message" in evt
+        assert evt["actor"] in ["buyer", "merchant", "setu"]
+
+# 16. Standalone preference prevents accessory bundling in full negotiation
+def test_standalone_preference_in_full_negotiation(db: Session):
+    provider = MockProvider()
+    buyer = BuyerAgent(provider)
+    merchant = MerchantAgent(provider)
+    orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+    res = orchestrator.run_negotiation_loop(
+        buyer_id="test_buyer_standalone",
+        intent="I only want Samsung Galaxy A15 standalone without accessories. Budget is ₹13,000.",
+        budget=Decimal("13000.00"),
+        max_rounds=4
+    )
+
+    assert res["decision"] in ["APPROVED", "REQUIRES_APPROVAL"]
+    assert res["selected_product_id"] == 41
+    # Standalone bundle should have exactly 1 item
+    assert len(res["basket"]["items"]) == 1
+    assert res["basket"]["items"][0]["product_id"] == 41
+
+# 17. No approved transaction can have negotiated total <= 0
+def test_approved_transaction_always_has_positive_total(db: Session):
+    provider = MockProvider()
+    buyer = BuyerAgent(provider)
+    merchant = MerchantAgent(provider)
+    orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+    res = orchestrator.run_negotiation_loop(
+        buyer_id="test_buyer_pos",
+        intent="Wireless earbuds under 2000.",
+        budget=Decimal("2000.00"),
+        max_rounds=4
+    )
+
+    assert res["decision"] == "APPROVED"
+    assert Decimal(res["final_amount"]) > Decimal("0")
+    assert Decimal(res["original_amount"]) > Decimal("0")
+    assert Decimal(res["margin_percent"]) >= Decimal("15.00")
+
+# 18. Policy verification happens only after agreement
+def test_policy_validation_happens_only_after_agreed_state(db: Session):
+    provider = MockProvider()
+    buyer = BuyerAgent(provider)
+    merchant = MerchantAgent(provider)
+    orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+    res = orchestrator.run_negotiation_loop(
+        buyer_id="test_buyer_policy_order",
+        intent="Wireless earbuds under 2000.",
+        budget=Decimal("2000.00"),
+        max_rounds=4
+    )
+
+    events = res["conversation_events"]
+    # Final approval must be at the very end
+    policy_eval_idx = next(i for i, e in enumerate(events) if e.get("id") == "evt_final_policy_eval")
+    approved_idx = next(i for i, e in enumerate(events) if e.get("id") == "evt_final_approved")
+
+    # Both must occur after all buyer/merchant turns
+    assert policy_eval_idx < approved_idx
+    assert policy_eval_idx >= 3
+
+
+# 19. Performance benchmark: multi-turn negotiation completes under 5 seconds
+def test_negotiation_runtime_latency_under_5_seconds(db: Session):
+    import time
+    provider = MockProvider()
+    buyer = BuyerAgent(provider)
+    merchant = MerchantAgent(provider)
+    orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+    start_time = time.perf_counter()
+    res = orchestrator.run_negotiation_loop(
+        buyer_id="test_perf_buyer",
+        intent="I want Wireless Earbuds Pro with budget ₹2,000.",
+        budget=Decimal("2000.00"),
+        max_rounds=4
+    )
+    elapsed = time.perf_counter() - start_time
+
+    assert res["decision"] == "APPROVED"
+    assert len(res["conversation_events"]) >= 5
+    assert elapsed < 5.0, f"Negotiation took too long: {elapsed:.2f}s"
+
+
+# 20. Performance benchmark: SSE streaming emits first event rapidly (< 1.5s) and full stream under 5s
+def test_sse_stream_latency_and_first_event_speed(db: Session, client: TestClient):
+    import time
+    import json
+    
+    req_data = {
+        "buyer_id": "test_perf_sse_buyer",
+        "intent": "I need wireless earbuds under 2000 INR",
+        "budget": 2000.0
+    }
+    
+    start_time = time.perf_counter()
+    first_event_time = None
+    events = []
+    
+    with client.stream("POST", "/api/demo/commerce/stream", json=req_data) as response:
+        assert response.status_code == 200
+        for line in response.iter_lines():
+            if line.startswith("data: "):
+                if first_event_time is None:
+                    first_event_time = time.perf_counter() - start_time
+                payload = json.loads(line[6:])
+                events.append(payload)
+
+    total_time = time.perf_counter() - start_time
+    assert first_event_time is not None
+    assert first_event_time < 1.5, f"First SSE event was too slow: {first_event_time:.2f}s"
+    assert total_time < 5.0, f"Complete SSE stream was too slow: {total_time:.2f}s"
+    assert len(events) >= 5
+

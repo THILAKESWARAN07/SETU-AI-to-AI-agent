@@ -1,7 +1,7 @@
 import logging
 import re
 from decimal import Decimal
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 from sqlalchemy.orm import Session
 
 from backend.app.models import Product, MerchantPolicy
@@ -121,7 +121,8 @@ class NegotiationOrchestrator:
         buyer_id: str,
         intent: str,
         budget: Decimal,
-        max_rounds: int = 4
+        max_rounds: int = 4,
+        on_event: Optional[Callable[[Dict[str, Any]], None]] = None
     ) -> Dict[str, Any]:
         import uuid
         import datetime
@@ -165,6 +166,23 @@ class NegotiationOrchestrator:
         )
         negotiation_history = []
         conversation_events = []
+        event_seq = 0
+
+        def emit_event(evt_data: Dict[str, Any]):
+            nonlocal event_seq
+            event_seq += 1
+            evt_data["sequence"] = event_seq
+            if "event_id" not in evt_data:
+                evt_data["event_id"] = evt_data.get("id", f"evt_{event_seq}")
+            if "type" not in evt_data:
+                evt_data["type"] = evt_data.get("event_type", "message")
+            conversation_events.append(evt_data)
+            if on_event:
+                try:
+                    on_event(evt_data)
+                except Exception as e:
+                    logger.warning(f"Error in on_event callback: {e}")
+
         current_status = "IN_PROGRESS"
         final_decision_pr_id = None
         final_price = None
@@ -459,11 +477,14 @@ class NegotiationOrchestrator:
         ]
 
         # Record Event 1: Buyer Opening Request
-        conversation_events.append({
+        emit_event({
             "id": "evt_r1_buyer_req",
+            "event_id": "evt_r1_buyer_req",
             "round": 1,
             "actor": "buyer",
             "event_type": "message",
+            "type": "buyer_message",
+            "state": "BUYER_REQUEST",
             "message": getattr(buyer_decision, "message", None) or buyer_decision.rationale,
             "offer": str(buyer_decision.total_amount),
             "basket_items": serialized_buyer_init_items,
@@ -472,11 +493,14 @@ class NegotiationOrchestrator:
         })
 
         # Record Event 2: SETU Catalog Availability & Budget Cap Check
-        conversation_events.append({
+        emit_event({
             "id": "evt_r1_setu_budget",
+            "event_id": "evt_r1_setu_budget",
             "round": 1,
             "actor": "setu",
             "event_type": "trust_check",
+            "type": "system_event",
+            "state": "BUYER_REQUEST",
             "message": f"SETU verified catalog availability & recorded buyer budget boundary (₹{effective_max_budget}).",
             "reason_label": "Budget & Stock Validated",
             "timestamp": format_ist_timestamp(0.8)
@@ -619,11 +643,14 @@ class NegotiationOrchestrator:
                     result="FAIL",
                     reason=merchant_decision.rationale
                 )
-                conversation_events.append({
+                emit_event({
                     "id": f"evt_r{round_idx}_merchant_reject",
+                    "event_id": f"evt_r{round_idx}_merchant_reject",
                     "round": round_idx,
                     "actor": "merchant",
                     "event_type": "rejection",
+                    "type": "merchant_message",
+                    "state": "REJECTED",
                     "message": getattr(merchant_decision, "message", None) or merchant_decision.rationale,
                     "offer": "0.00",
                     "strategy": f"Merchant Strategy: {sales_eval['strategy']}",
@@ -702,11 +729,14 @@ class NegotiationOrchestrator:
                     for item in latest_buyer_offer.basket_items
                 ]
 
-                conversation_events.append({
+                emit_event({
                     "id": f"evt_r{round_idx}_merchant_accept",
+                    "event_id": f"evt_r{round_idx}_merchant_accept",
                     "round": round_idx,
                     "actor": "merchant",
                     "event_type": "acceptance",
+                    "type": "merchant_message",
+                    "state": "AGREED",
                     "message": getattr(merchant_decision, "message", None) or f"Deal agreed! I'll accept ₹{latest_buyer_offer.total_amount} for the basket.",
                     "offer": str(latest_buyer_offer.total_amount),
                     "basket_items": serialized_merchant_accept_items,
@@ -811,11 +841,14 @@ class NegotiationOrchestrator:
                 is_bundle_counter = len(merchant_decision.basket_items) > 1
 
                 # Record Merchant Counter Event
-                conversation_events.append({
+                emit_event({
                     "id": f"evt_r{round_idx}_merchant_counter",
+                    "event_id": f"evt_r{round_idx}_merchant_counter",
                     "round": round_idx,
                     "actor": "merchant",
                     "event_type": "bundle_offer" if is_bundle_counter else "counter_offer",
+                    "type": "merchant_message",
+                    "state": "MERCHANT_COUNTER",
                     "message": getattr(merchant_decision, "message", None) or merchant_decision.rationale,
                     "offer": str(merchant_decision.total_amount),
                     "basket_items": serialized_merchant_counter_items,
@@ -825,11 +858,14 @@ class NegotiationOrchestrator:
                 })
 
                 # Record SETU Price Floor & Margin Check
-                conversation_events.append({
+                emit_event({
                     "id": f"evt_r{round_idx}_setu_floor",
+                    "event_id": f"evt_r{round_idx}_setu_floor",
                     "round": round_idx,
                     "actor": "setu",
                     "event_type": "trust_check",
+                    "type": "system_event",
+                    "state": "PRICING_VALIDATED",
                     "message": f"SETU enforced merchant price floor & margin policy constraints ({calculated_margin.quantize(Decimal('0.01'))}% margin).",
                     "reason_label": "Price Floor & Margin Enforced",
                     "timestamp": format_ist_timestamp(1.2 * round_idx + 0.3)
@@ -928,11 +964,14 @@ class NegotiationOrchestrator:
                         result="FAIL",
                         reason=buyer_decision.rationale
                     )
-                    conversation_events.append({
+                    emit_event({
                         "id": f"evt_r{round_idx}_buyer_reject",
+                        "event_id": f"evt_r{round_idx}_buyer_reject",
                         "round": round_idx,
                         "actor": "buyer",
                         "event_type": "rejection",
+                        "type": "buyer_message",
+                        "state": "REJECTED",
                         "message": getattr(buyer_decision, "message", None) or buyer_decision.rationale,
                         "offer": "0.00",
                         "reason_label": "Buyer declined proposal",
@@ -978,11 +1017,14 @@ class NegotiationOrchestrator:
                         reason=buyer_decision.rationale
                     )
 
-                    conversation_events.append({
+                    emit_event({
                         "id": f"evt_r{round_idx}_buyer_accept",
+                        "event_id": f"evt_r{round_idx}_buyer_accept",
                         "round": round_idx,
                         "actor": "buyer",
                         "event_type": "acceptance",
+                        "type": "buyer_message",
+                        "state": "AGREED",
                         "message": getattr(buyer_decision, "message", None) or f"Deal agreed! ₹{latest_merchant_counter.total_amount} for the basket works for me.",
                         "offer": str(latest_merchant_counter.total_amount),
                         "basket_items": serialized_merchant_counter_items,
@@ -1069,11 +1111,14 @@ class NegotiationOrchestrator:
                         }
                     )
 
-                    conversation_events.append({
+                    emit_event({
                         "id": f"evt_r{round_idx}_buyer_counter",
+                        "event_id": f"evt_r{round_idx}_buyer_counter",
                         "round": round_idx,
                         "actor": "buyer",
                         "event_type": "counter_offer",
+                        "type": "buyer_message",
+                        "state": "BUYER_COUNTER",
                         "message": getattr(buyer_decision, "message", None) or buyer_decision.rationale,
                         "offer": str(buyer_decision.total_amount),
                         "basket_items": serialized_buyer_counter_items,
@@ -1196,22 +1241,28 @@ class NegotiationOrchestrator:
             margin_percent = Decimal(purchase_res["margin_percent"])
 
             # Record Final SETU PolicyEngine Check Event
-            conversation_events.append({
+            emit_event({
                 "id": "evt_final_policy_eval",
+                "event_id": "evt_final_policy_eval",
                 "round": round_idx,
                 "actor": "setu",
                 "event_type": "trust_check",
+                "type": "system_event",
+                "state": "POLICY_VALIDATION",
                 "message": "SETU Policy Engine evaluated final basket integrity: Item price floors, merchant margin, inventory, and signature constraints PASSED.",
                 "reason_label": "PolicyEngine Validation Passed",
                 "timestamp": format_ist_timestamp(1.2 * round_idx + 1.0)
             })
 
             # Record Final Approved Event
-            conversation_events.append({
+            emit_event({
                 "id": "evt_final_approved",
+                "event_id": "evt_final_approved",
                 "round": round_idx,
                 "actor": "setu",
                 "event_type": "trust_check",
+                "type": "system_event",
+                "state": "APPROVED",
                 "message": f"Decision: APPROVED. Deal locked at ₹{final_price}. Transaction ledger snapshot recorded. Authorized for checkout.",
                 "offer": str(final_price),
                 "basket_items": serialized_basket_items,

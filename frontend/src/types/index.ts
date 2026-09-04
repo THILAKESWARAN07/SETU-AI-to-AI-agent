@@ -118,10 +118,14 @@ export interface NegotiationHistoryItem {
 }
 
 export interface ConversationEvent {
-  id: string;
+  id?: string;
+  event_id?: string;
+  sequence?: number;
   round: number;
   actor: 'buyer' | 'merchant' | 'setu';
-  event_type: 'message' | 'counter_offer' | 'bundle_offer' | 'acceptance' | 'trust_check' | 'rejection';
+  event_type?: 'message' | 'counter_offer' | 'bundle_offer' | 'acceptance' | 'trust_check' | 'rejection' | string;
+  type?: 'buyer_message' | 'merchant_message' | 'system_event' | 'complete' | 'error' | string;
+  state?: string;
   message: string;
   offer?: string | number;
   basket_items?: any[];

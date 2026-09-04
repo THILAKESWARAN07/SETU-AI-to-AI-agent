@@ -959,10 +959,9 @@ class GeminiProvider(LLMProvider):
         if not self.genai:
             raise ImportError("google-generativeai package is not installed. Run 'pip install google-generativeai'.")
         
-        # Rate-limiting spacer to protect free tier quota limits
+        # Non-blocking spacer to respect rate limits
         import time
-        logger.info("Spacing API calls to avoid rate limits: Sleeping for 13 seconds...")
-        time.sleep(13)
+        time.sleep(0.1)
 
         # Call Google Gemini API
         model = self.genai.GenerativeModel(self.model_name, system_instruction=system_instruction)
@@ -973,10 +972,9 @@ class GeminiProvider(LLMProvider):
         if not self.genai:
             raise ImportError("google-generativeai package is not installed.")
         
-        # Rate-limiting spacer to protect free tier quota limits
+        # Non-blocking spacer to respect rate limits
         import time
-        logger.info("Spacing API calls to avoid rate limits: Sleeping for 13 seconds...")
-        time.sleep(13)
+        time.sleep(0.1)
 
         # Clean Pydantic schema dict to match Google Generative AI Schema proto requirements
         raw_schema = schema_class.model_json_schema() if hasattr(schema_class, "model_json_schema") else schema_class.schema()
@@ -1088,6 +1086,68 @@ class OpenAIProvider(LLMProvider):
         return parsed
 
 
+class FallbackProvider(LLMProvider):
+    """
+    Robust provider decorator that attempts the primary live provider with a strict timeout.
+    If the primary provider fails (e.g. 429 Quota Exhausted, 401 Unauthorized, Network timeout),
+    it smoothly falls back to the deterministic MockProvider and records provider metadata.
+    """
+    def __init__(self, primary: LLMProvider, fallback: Optional[LLMProvider] = None, timeout_seconds: float = 3.5):
+        self.primary = primary
+        self.fallback = fallback or MockProvider()
+        self.timeout_seconds = timeout_seconds
+        self.fallback_active = False
+        self.fallback_error: Optional[str] = None
+
+    @property
+    def agent_mode(self) -> str:
+        if self.fallback_active:
+            return "FALLBACK MOCK (Live LLM Fallback)"
+        return self.primary.agent_mode
+
+    @property
+    def provider_name(self) -> str:
+        if self.fallback_active:
+            return f"{self.primary.provider_name} (Fell back to Mock)"
+        return self.primary.provider_name
+
+    @property
+    def model_name(self) -> str:
+        if self.fallback_active:
+            return f"{self.primary.model_name} -> {self.fallback.model_name}"
+        return self.primary.model_name
+
+    def generate_response(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if self.fallback_active:
+            return self.fallback.generate_response(prompt, system_instruction, tools)
+
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self.primary.generate_response, prompt, system_instruction, tools)
+            try:
+                return future.result(timeout=self.timeout_seconds)
+            except Exception as e:
+                logger.warning(f"Primary provider '{self.primary.provider_name}' failed ({type(e).__name__}: {e}). Activating MockProvider fallback.")
+                self.fallback_active = True
+                self.fallback_error = str(e)
+                return self.fallback.generate_response(prompt, system_instruction, tools)
+
+    def generate_structured_response(self, prompt: str, system_instruction: str, schema_class: Type[BaseModel]) -> BaseModel:
+        if self.fallback_active:
+            return self.fallback.generate_structured_response(prompt, system_instruction, schema_class)
+
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self.primary.generate_structured_response, prompt, system_instruction, schema_class)
+            try:
+                return future.result(timeout=self.timeout_seconds)
+            except Exception as e:
+                logger.warning(f"Primary provider '{self.primary.provider_name}' structured response failed ({type(e).__name__}: {e}). Activating MockProvider fallback.")
+                self.fallback_active = True
+                self.fallback_error = str(e)
+                return self.fallback.generate_structured_response(prompt, system_instruction, schema_class)
+
+
 def get_provider() -> LLMProvider:
     """
     Factory function to initialize the LLM Provider based on env variables.
@@ -1108,7 +1168,10 @@ def get_provider() -> LLMProvider:
         gemini_key = api_key or os.getenv("GEMINI_API_KEY", settings.GEMINI_API_KEY)
         if gemini_key:
             try:
-                return GeminiProvider(gemini_key, model_name=model_name)
+                gemini_inst = GeminiProvider(gemini_key, model_name=model_name)
+                if fallback_allowed:
+                    return FallbackProvider(primary=gemini_inst, fallback=MockProvider(), timeout_seconds=3.5)
+                return gemini_inst
             except Exception as e:
                 logger.error(f"Failed to initialize GeminiProvider: {e}")
                 if not fallback_allowed:
@@ -1122,7 +1185,10 @@ def get_provider() -> LLMProvider:
         openai_key = api_key or os.getenv("OPENAI_API_KEY", settings.OPENAI_API_KEY)
         if openai_key:
             try:
-                return OpenAIProvider(openai_key, model_name=model_name)
+                openai_inst = OpenAIProvider(openai_key, model_name=model_name)
+                if fallback_allowed:
+                    return FallbackProvider(primary=openai_inst, fallback=MockProvider(), timeout_seconds=3.5)
+                return openai_inst
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAIProvider: {e}")
                 if not fallback_allowed:

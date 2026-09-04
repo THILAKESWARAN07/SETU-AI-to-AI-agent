@@ -631,7 +631,8 @@ def stream_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depend
     from backend.app.agents.merchant_agent import MerchantAgent
     from backend.app.agents.orchestrator import NegotiationOrchestrator, NegotiationError
     import json
-    import time
+    import queue
+    import threading
 
     def event_stream():
         provider = get_provider()
@@ -639,22 +640,46 @@ def stream_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depend
         merchant = MerchantAgent(provider)
         orchestrator = NegotiationOrchestrator(db, buyer, merchant)
 
-        try:
-            res = orchestrator.run_negotiation_loop(
-                buyer_id=request.buyer_id,
-                intent=request.intent,
-                budget=request.budget,
-                max_rounds=4
-            )
-            for evt in res.get("conversation_events", []):
-                yield f"data: {json.dumps(evt)}\n\n"
-                time.sleep(0.1)
-            yield f"data: {json.dumps({'event_type': 'COMPLETE', 'result': res})}\n\n"
-        except NegotiationError as e:
-            err_data = getattr(e, "result_data", {"decision": "REJECTED", "reasons": [str(e)]})
-            yield f"data: {json.dumps({'event_type': 'ERROR', 'error': str(e), 'result': err_data})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'event_type': 'ERROR', 'error': str(e)})}\n\n"
+        event_q: queue.Queue = queue.Queue()
+
+        def on_event_cb(evt: dict):
+            event_q.put({"msg_type": "event", "data": evt})
+
+        def worker():
+            try:
+                res = orchestrator.run_negotiation_loop(
+                    buyer_id=request.buyer_id,
+                    intent=request.intent,
+                    budget=request.budget,
+                    max_rounds=4,
+                    on_event=on_event_cb
+                )
+                event_q.put({"msg_type": "complete", "result": res})
+            except NegotiationError as e:
+                err_data = getattr(e, "result_data", {"decision": "REJECTED", "reasons": [str(e)]})
+                event_q.put({"msg_type": "error", "error": str(e), "result": err_data})
+            except Exception as e:
+                logger.error(f"Error in streaming negotiation worker: {e}", exc_info=True)
+                event_q.put({"msg_type": "error", "error": str(e)})
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+        while True:
+            try:
+                item = event_q.get(timeout=30.0)
+            except queue.Empty:
+                yield f"data: {json.dumps({'event_type': 'ERROR', 'type': 'error', 'error': 'Stream timed out.'})}\n\n"
+                break
+
+            if item["msg_type"] == "event":
+                yield f"data: {json.dumps(item['data'])}\n\n"
+            elif item["msg_type"] == "complete":
+                yield f"data: {json.dumps({'event_type': 'COMPLETE', 'type': 'complete', 'result': item['result']})}\n\n"
+                break
+            elif item["msg_type"] == "error":
+                yield f"data: {json.dumps({'event_type': 'ERROR', 'type': 'error', 'error': item.get('error'), 'result': item.get('result')})}\n\n"
+                break
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
