@@ -1065,6 +1065,269 @@ def test_proposal_type_controls_payment_snapshot_label():
         db.close()
 
 
+def test_samsung_negotiation_never_leaks_earbuds_product_name():
+    """
+    Requirement 1:
+    No event in a Samsung Galaxy A15 negotiation may mention 'Wireless Earbuds' or 'Earbuds'.
+    """
+    db = SessionLocal()
+    try:
+        provider = MockProvider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        events = []
+        result = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_samsung_test_1",
+            intent="I need a Mobile under 12000",
+            budget=Decimal("12000.00"),
+            max_rounds=4,
+            on_event=lambda ev: events.append(ev)
+        )
+
+        assert result["decision"] in ["APPROVED", "REQUIRES_APPROVAL"]
+        assert result["selected_product_id"] == 41
+
+        for ev in events:
+            msg = ev.get("message", "")
+            assert "wireless earbuds" not in msg.lower(), f"Leaked earbuds into event: {ev}"
+            assert "charging case" not in msg.lower(), f"Leaked charging case into event: {ev}"
+            for item in ev.get("basket_items", []):
+                assert "earbud" not in item.get("name", "").lower(), f"Leaked earbuds item in basket: {item}"
+
+        for prop in result.get("proposals", []):
+            for item in prop.get("basket_items", []):
+                assert "earbud" not in item.get("name", "").lower(), f"Leaked earbuds item in proposal: {prop}"
+    finally:
+        db.close()
+
+
+def test_samsung_negotiation_never_uses_stale_1499_price():
+    """
+    Requirement 2 & 3:
+    In a Samsung Galaxy A15 negotiation (catalog 12999, budget 12000), no price of 1499.00 or 1475.00
+    from previous earbuds negotiations may ever be generated or held.
+    """
+    db = SessionLocal()
+    try:
+        provider = MockProvider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        events = []
+        result = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_samsung_test_2",
+            intent="I need a Mobile under 12000",
+            budget=Decimal("12000.00"),
+            max_rounds=4,
+            on_event=lambda ev: events.append(ev)
+        )
+
+        forbidden_prices = ["1499", "1475", "1450", "1899", "1599"]
+        for ev in events:
+            offer = str(ev.get("offer", ""))
+            standalone = str(ev.get("standalone_counter", ""))
+            msg = ev.get("message", "")
+            for p in forbidden_prices:
+                assert f"₹{p}" not in msg, f"Leaked price ₹{p} into event message: {msg}"
+                assert offer != p and offer != f"{p}.00", f"Leaked offer price {p} into event: {ev}"
+                assert standalone != p and standalone != f"{p}.00", f"Leaked standalone counter {p} into event: {ev}"
+
+        # Agreed final price must be 11999.00 or 12000.00, never 1499.00
+        assert Decimal(str(result["final_amount"])) in [Decimal("11999.00"), Decimal("12000.00")]
+    finally:
+        db.close()
+
+
+def test_samsung_negotiation_never_uses_stale_1475_buyer_counter():
+    """
+    Requirement 2:
+    Buyer counters must be financially relevant to Samsung Galaxy A15, never stale ₹1,475.
+    """
+    db = SessionLocal()
+    try:
+        provider = MockProvider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        events = []
+        result = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_samsung_test_3",
+            intent="I need a Mobile under 12000",
+            budget=Decimal("12000.00"),
+            max_rounds=4,
+            on_event=lambda ev: events.append(ev)
+        )
+
+        buyer_events = [e for e in events if e.get("actor") == "buyer"]
+        for be in buyer_events:
+            offer_str = str(be.get("offer", "0.00"))
+            if offer_str != "0.00":
+                offer_dec = Decimal(offer_str)
+                assert offer_dec >= Decimal("10000.00"), f"Invalid low buyer offer: {offer_dec} in {be}"
+    finally:
+        db.close()
+
+
+def test_current_product_context_is_preserved_across_all_rounds():
+    """
+    Requirement 1 & 7:
+    All rounds and events must preserve current product ID (41) and product name (Samsung Galaxy A15).
+    """
+    db = SessionLocal()
+    try:
+        provider = MockProvider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        events = []
+        result = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_samsung_test_4",
+            intent="I need a Mobile under 12000",
+            budget=Decimal("12000.00"),
+            max_rounds=4,
+            on_event=lambda ev: events.append(ev)
+        )
+
+        for ev in events:
+            if "basket_items" in ev and ev["basket_items"]:
+                primary_item = next((it for it in ev["basket_items"] if it.get("is_primary")), None)
+                if primary_item:
+                    assert primary_item["product_id"] == 41
+                    assert primary_item["name"] == "Samsung Galaxy A15"
+    finally:
+        db.close()
+
+
+def test_previous_merchant_price_is_scoped_to_current_negotiation():
+    """
+    Requirement 3 & 4:
+    Hold price and previous standalone offer are scoped to active negotiation.
+    """
+    db = SessionLocal()
+    try:
+        provider = MockProvider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        # 1. Run Earbuds negotiation first (standalone is 1499)
+        res_earbuds = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_seq_1",
+            intent="I need wireless earbuds under ₹2,000.",
+            budget=Decimal("2000.00"),
+            max_rounds=4
+        )
+        assert res_earbuds["selected_product_id"] == 1
+        assert Decimal(str(res_earbuds["final_amount"])) == Decimal("1499.00")
+
+        # 2. Immediately run Samsung negotiation in the same process
+        res_samsung = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_seq_2",
+            intent="I need a Mobile under 12000",
+            budget=Decimal("12000.00"),
+            max_rounds=4
+        )
+        assert res_samsung["selected_product_id"] == 41
+        assert Decimal(str(res_samsung["final_amount"])) in [Decimal("11999.00"), Decimal("12000.00")]
+
+        # Check proposals in second run
+        proposals_samsung = res_samsung["proposals"]
+        for p in proposals_samsung:
+            for item in p.get("basket_items", []):
+                assert item["product_id"] in [41, 44, 45, 46], f"Leaked item in samsung proposal: {item}"
+    finally:
+        db.close()
+
+
+def test_multi_product_isolation_sequential():
+    """
+    Required Multi-Product Isolation Test:
+    Run Scenario A (Wireless Earbuds Pro) -> Scenario B (Samsung Galaxy A15) -> Scenario C (Smartwatch + Strap)
+    Verify zero cross-contamination of:
+    - product name
+    - product ID
+    - price
+    - basket items
+    - accessories
+    - proposals
+    """
+    db = SessionLocal()
+    try:
+        provider = MockProvider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        # Scenario A: Earbuds
+        ev_a = []
+        res_a = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_a",
+            intent="I want wireless earbuds",
+            budget=Decimal("2000.00"),
+            max_rounds=4,
+            on_event=lambda e: ev_a.append(e)
+        )
+        assert res_a["selected_product_id"] == 1
+        assert Decimal(str(res_a["final_amount"])) == Decimal("1499.00")
+        assert "Samsung" not in str(res_a)
+        assert "Smartwatch" not in str(res_a)
+
+        # Scenario B: Samsung Galaxy A15
+        ev_b = []
+        res_b = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_b",
+            intent="I need a Mobile under 12000",
+            budget=Decimal("12000.00"),
+            max_rounds=4,
+            on_event=lambda e: ev_b.append(e)
+        )
+        assert res_b["selected_product_id"] == 41
+        assert Decimal(str(res_b["final_amount"])) in [Decimal("11999.00"), Decimal("12000.00")]
+        
+        # Verify no earbuds or smartwatch data leaked into Samsung events or proposals
+        for ev in ev_b:
+            msg = ev.get("message", "")
+            assert "earbuds" not in msg.lower()
+            assert "charging case" not in msg.lower()
+            assert "smartwatch" not in msg.lower()
+            assert "₹1,499" not in msg and "₹1499" not in msg
+            assert "₹1,475" not in msg and "₹1475" not in msg
+            assert ev.get("offer") not in ["1499.00", "1475.00", "1899.00"]
+        for p in res_b["proposals"]:
+            assert p.get("total_amount") not in ["1499.00", "1475.00", "1899.00"]
+
+        # Scenario C: Smartwatch
+        ev_c = []
+        res_c = orchestrator.run_negotiation_loop(
+            buyer_id="buyer_c",
+            intent="I need a smartwatch under 4000",
+            budget=Decimal("4000.00"),
+            max_rounds=4,
+            on_event=lambda e: ev_c.append(e)
+        )
+        assert res_c["selected_product_id"] == 56
+        assert Decimal(str(res_c["final_amount"])) in [Decimal("3499.00"), Decimal("3848.00")]
+        
+        # Verify no earbuds or samsung data leaked into Smartwatch events or proposals
+        for ev in ev_c:
+            msg = ev.get("message", "")
+            assert "earbuds" not in msg.lower()
+            assert "samsung" not in msg.lower()
+            assert "galaxy" not in msg.lower()
+            assert "₹1,499" not in msg and "₹1499" not in msg
+            assert ev.get("offer") not in ["1499.00", "1475.00", "11999.00"]
+        for p in res_c["proposals"]:
+            assert p.get("total_amount") not in ["1499.00", "1475.00", "11999.00"]
+    finally:
+        db.close()
+
+
+
 
 
 

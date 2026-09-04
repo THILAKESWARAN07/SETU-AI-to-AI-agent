@@ -194,15 +194,35 @@ export default function Negotiation() {
         if (origAmt > 0) setLiveCatalogPrice(origAmt);
         if (finAmt > 0) setLiveFinalPrice(finAmt);
 
-        if (finalRes.buyer_opening_offer?.offered_amount) {
-          setLiveBuyerOpeningOffer(parseFloat(String(finalRes.buyer_opening_offer.offered_amount)));
-        }
-        if (finalRes.merchant_standalone_counter?.offered_amount) {
-          setLiveMerchantStandaloneCounter(parseFloat(String(finalRes.merchant_standalone_counter.offered_amount)));
-        }
-        if (finalRes.merchant_bundle_proposal?.offered_amount) {
-          setLiveMerchantBundleProposal(parseFloat(String(finalRes.merchant_bundle_proposal.offered_amount)));
-        }
+        const buyerOpeningVal = parseFloat(String(
+          finalRes.buyer_opening_offer?.offered_amount ||
+          finalRes.buyer_opening_offer?.total_amount ||
+          finalRes.buyer_opening_offer?.amount ||
+          finalRes.proposals?.find((p: any) => p.proposal_id === 'prop_b_r1')?.total_amount ||
+          finalRes.conversation_events?.find((e: any) => e.actor === 'buyer' && e.round === 1)?.offer ||
+          '0'
+        ));
+        if (buyerOpeningVal > 0) setLiveBuyerOpeningOffer(buyerOpeningVal);
+
+        const merchantStandaloneVal = parseFloat(String(
+          finalRes.merchant_standalone_counter?.offered_amount ||
+          finalRes.merchant_standalone_counter?.total_amount ||
+          finalRes.merchant_standalone_counter?.amount ||
+          finalRes.proposals?.find((p: any) => p.proposal_type === 'STANDALONE_COUNTER')?.total_amount ||
+          finalRes.conversation_events?.find((e: any) => e.actor === 'merchant' && e.event_type !== 'bundle_offer')?.offer ||
+          '0'
+        ));
+        if (merchantStandaloneVal > 0) setLiveMerchantStandaloneCounter(merchantStandaloneVal);
+
+        const merchantBundleVal = parseFloat(String(
+          finalRes.merchant_bundle_proposal?.offered_amount ||
+          finalRes.merchant_bundle_proposal?.total_amount ||
+          finalRes.merchant_bundle_proposal?.amount ||
+          finalRes.proposals?.find((p: any) => p.proposal_type === 'BUNDLE_PROPOSAL')?.total_amount ||
+          '0'
+        ));
+        if (merchantBundleVal > 0) setLiveMerchantBundleProposal(merchantBundleVal);
+
         if (finalRes.basket?.items) {
           const names = finalRes.basket.items.map((i: any) => i.name).join(' + ');
           setLiveFinalBasketDesc(names);
@@ -236,15 +256,35 @@ export default function Negotiation() {
             if (origAmt > 0) setLiveCatalogPrice(origAmt);
             if (finAmt > 0) setLiveFinalPrice(finAmt);
 
-            if (fallbackRes.buyer_opening_offer?.offered_amount) {
-              setLiveBuyerOpeningOffer(parseFloat(String(fallbackRes.buyer_opening_offer.offered_amount)));
-            }
-            if (fallbackRes.merchant_standalone_counter?.offered_amount) {
-              setLiveMerchantStandaloneCounter(parseFloat(String(fallbackRes.merchant_standalone_counter.offered_amount)));
-            }
-            if (fallbackRes.merchant_bundle_proposal?.offered_amount) {
-              setLiveMerchantBundleProposal(parseFloat(String(fallbackRes.merchant_bundle_proposal.offered_amount)));
-            }
+            const fbBuyerOpeningVal = parseFloat(String(
+              fallbackRes.buyer_opening_offer?.offered_amount ||
+              fallbackRes.buyer_opening_offer?.total_amount ||
+              fallbackRes.buyer_opening_offer?.amount ||
+              fallbackRes.proposals?.find((p: any) => p.proposal_id === 'prop_b_r1')?.total_amount ||
+              fallbackRes.conversation_events?.find((e: any) => e.actor === 'buyer' && e.round === 1)?.offer ||
+              '0'
+            ));
+            if (fbBuyerOpeningVal > 0) setLiveBuyerOpeningOffer(fbBuyerOpeningVal);
+
+            const fbMerchantStandaloneVal = parseFloat(String(
+              fallbackRes.merchant_standalone_counter?.offered_amount ||
+              fallbackRes.merchant_standalone_counter?.total_amount ||
+              fallbackRes.merchant_standalone_counter?.amount ||
+              fallbackRes.proposals?.find((p: any) => p.proposal_type === 'STANDALONE_COUNTER')?.total_amount ||
+              fallbackRes.conversation_events?.find((e: any) => e.actor === 'merchant' && e.event_type !== 'bundle_offer')?.offer ||
+              '0'
+            ));
+            if (fbMerchantStandaloneVal > 0) setLiveMerchantStandaloneCounter(fbMerchantStandaloneVal);
+
+            const fbMerchantBundleVal = parseFloat(String(
+              fallbackRes.merchant_bundle_proposal?.offered_amount ||
+              fallbackRes.merchant_bundle_proposal?.total_amount ||
+              fallbackRes.merchant_bundle_proposal?.amount ||
+              fallbackRes.proposals?.find((p: any) => p.proposal_type === 'BUNDLE_PROPOSAL')?.total_amount ||
+              '0'
+            ));
+            if (fbMerchantBundleVal > 0) setLiveMerchantBundleProposal(fbMerchantBundleVal);
+
             if (fallbackRes.basket?.items) {
               const names = fallbackRes.basket.items.map((i: any) => i.name).join(' + ');
               setLiveFinalBasketDesc(names);

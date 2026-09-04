@@ -307,6 +307,18 @@ class MockProvider(LLMProvider):
     def _extract_target_context(prompt: str) -> str:
         prompt_lower = prompt.lower()
         
+        # 1. Authoritative: Check === CURRENT NEGOTIATION CONTEXT === header
+        if "=== current negotiation context ===" in prompt_lower:
+            ctx_block = prompt_lower.split("=== current negotiation context ===")[1].split("===")[0]
+            if any(k in ctx_block for k in ["product id: 41", "product id: 42", "product id: 43", "product id: 11", "product id: 12", "samsung", "galaxy", "redmi", "motorola", "phone"]):
+                return "mobile_phone"
+            if any(k in ctx_block for k in ["product id: 56", "product id: 31", "smartwatch", "watch"]):
+                return "smartwatch"
+            if any(k in ctx_block for k in ["product id: 52", "product id: 53", "product id: 54", "product id: 55", "product id: 21", "product id: 22", "keyboard", "mouse", "laptop"]):
+                return "computing"
+            if any(k in ctx_block for k in ["product id: 1", "product id: 2", "product id: 3", "product id: 4", "product id: 47", "product id: 48", "product id: 51", "earbuds", "audio", "soundbar"]):
+                return "audio"
+
         # Strip out "Catalog Search Results: [...]" so products merely listed in search results do not trigger false positives
         cleaned_prompt = prompt_lower
         if "catalog search results:" in cleaned_prompt:
@@ -576,27 +588,31 @@ class MockProvider(LLMProvider):
                 basket_items = [BasketItemSchema(product_id=1, name="Wireless Earbuds Pro", quantity=1, original_price=Decimal("1599.00"), negotiated_price=Decimal("1500.00"), is_primary=True)]
             elif target_context == "mobile_phone":
                 product_id = 41
-                is_strict_low_budget = ("12000" in prompt_lower or "12,000" in prompt_lower or "11500" in prompt_lower) and not ("15000" in prompt_lower or "15,000" in prompt_lower or "14000" in prompt_lower or "14,000" in prompt_lower or "13000" in prompt_lower or "13,000" in prompt_lower)
                 is_standalone_req = "standalone without" in prompt_lower or "without accessories" in prompt_lower or "only want" in prompt_lower or "phone alone" in prompt_lower or "without bundle" in prompt_lower or "standalone preferred: true" in prompt_lower
+                is_bundle_buyer = ("with accessories" in prompt_lower or "accessories" in prompt_lower or "with charger" in prompt_lower or "bundle" in prompt_lower or "15000" in prompt_lower or "15,000" in prompt_lower) and not is_standalone_req
                 
-                if "proposed basket counter-offer" in prompt_lower or "merchant counter-offer" in prompt_lower or "option 1" in prompt_lower:
-                    if is_strict_low_budget:
-                        action = "COUNTER"
-                        unit_price = Decimal("12000.00")
-                        total_amount = Decimal("12000.00")
-                        rationale = "Bundle exceeds strict budget of 12,000. Countering with phone standalone."
-                        message = "That bundle is above my ₹12,000 budget. I'll take the phone alone if you can do ₹12,000."
+                if "proposed basket counter-offer" in prompt_lower or "merchant counter-offer" in prompt_lower or "option 1" in prompt_lower or "evaluate merchant" in prompt_lower or "current merchant standalone" in prompt_lower:
+                    if is_bundle_buyer and ("13000" in prompt_lower or "13,000" in prompt_lower):
+                        action = "REJECT"
+                        unit_price = Decimal("12999.00")
+                        total_amount = Decimal("12999.00")
+                        rationale = "Merchant bundle offer of ₹13,596 exceeds strict budget limit of ₹13,000."
+                        message = "The bundle price of ₹13,596 exceeds my maximum budget of ₹13,000. I cannot proceed with this purchase."
                         basket_items = [
-                            BasketItemSchema(
-                                product_id=41,
-                                name="Samsung Galaxy A15",
-                                quantity=1,
-                                original_price=Decimal("12999.00"),
-                                negotiated_price=Decimal("12000.00"),
-                                is_primary=True
-                            )
+                            BasketItemSchema(product_id=41, name="Samsung Galaxy A15", quantity=1, original_price=Decimal("12999.00"), negotiated_price=Decimal("12999.00"), is_primary=True)
                         ]
-                    elif is_standalone_req:
+                    elif is_bundle_buyer:
+                        action = "ACCEPT"
+                        total_amount = Decimal("13596.00")
+                        rationale = "Buyer accepts the mobile phone with fast charger, protective case, and tempered glass bundle."
+                        message = "₹13,596 for the Galaxy A15 with charger, protective case, and tempered glass bundle works for my budget. Deal!"
+                        basket_items = [
+                            BasketItemSchema(product_id=41, name="Samsung Galaxy A15", quantity=1, original_price=Decimal("12999.00"), negotiated_price=Decimal("11999.00"), is_primary=True),
+                            BasketItemSchema(product_id=44, name="25W Fast Charger", quantity=1, original_price=Decimal("1299.00"), negotiated_price=Decimal("999.00"), is_primary=False),
+                            BasketItemSchema(product_id=45, name="Mobile Protective Case", quantity=1, original_price=Decimal("499.00"), negotiated_price=Decimal("399.00"), is_primary=False),
+                            BasketItemSchema(product_id=46, name="Tempered Glass", quantity=1, original_price=Decimal("299.00"), negotiated_price=Decimal("199.00"), is_primary=False)
+                        ]
+                    elif is_standalone_req and ("13000" in prompt_lower or "15000" in prompt_lower or "12500" in prompt_lower):
                         action = "ACCEPT"
                         unit_price = Decimal("12500.00")
                         total_amount = Decimal("12500.00")
@@ -608,20 +624,25 @@ class MockProvider(LLMProvider):
                                 name="Samsung Galaxy A15",
                                 quantity=1,
                                 original_price=Decimal("12999.00"),
-                                negotiated_price=unit_price,
+                                negotiated_price=Decimal("12500.00"),
                                 is_primary=True
                             )
                         ]
                     else:
                         action = "ACCEPT"
-                        total_amount = Decimal("13596.00")
-                        rationale = "Buyer accepts the mobile phone with fast charger, protective case, and tempered glass bundle."
-                        message = "₹13,596 for the Galaxy A15 with charger, protective case, and tempered glass bundle works for my budget. Deal!"
+                        unit_price = Decimal("11999.00")
+                        total_amount = Decimal("11999.00")
+                        rationale = "Buyer accepts standalone phone offer of ₹11,999 within the ₹12,000 budget."
+                        message = "₹11,999 for the standalone Samsung Galaxy A15 works within my ₹12,000 budget. Let's proceed with the purchase."
                         basket_items = [
-                            BasketItemSchema(product_id=41, name="Samsung Galaxy A15", quantity=1, original_price=Decimal("12999.00"), negotiated_price=Decimal("11999.00"), is_primary=True),
-                            BasketItemSchema(product_id=44, name="25W Fast Charger", quantity=1, original_price=Decimal("1299.00"), negotiated_price=Decimal("999.00"), is_primary=False),
-                            BasketItemSchema(product_id=45, name="Mobile Protective Case", quantity=1, original_price=Decimal("499.00"), negotiated_price=Decimal("399.00"), is_primary=False),
-                            BasketItemSchema(product_id=46, name="Tempered Glass", quantity=1, original_price=Decimal("299.00"), negotiated_price=Decimal("199.00"), is_primary=False)
+                            BasketItemSchema(
+                                product_id=41,
+                                name="Samsung Galaxy A15",
+                                quantity=1,
+                                original_price=Decimal("12999.00"),
+                                negotiated_price=Decimal("11999.00"),
+                                is_primary=True
+                            )
                         ]
                 else:
                     action = "OFFER"
@@ -810,7 +831,7 @@ class MockProvider(LLMProvider):
             elif target_context == "mobile_phone":
                 product_id = 41
                 is_standalone_req = ("without accessories" in prompt_lower or "standalone without" in prompt_lower or "phone alone" in prompt_lower or "only want" in prompt_lower or "without bundle" in prompt_lower or ("standalone" in prompt_lower and not "recommended standalone price" in prompt_lower and not "for the standalone" in prompt_lower and not "standalone phone" in prompt_lower))
-                is_counter_from_buyer = "buyer decision action: counter" in prompt_lower or any(w in prompt_lower for w in ["outside my", "above my", "phone alone", "phone standalone", "take the phone", "exceeds strict budget"])
+                is_counter_from_buyer = "buyer decision action: counter" in prompt_lower or any(w in prompt_lower for w in ["outside my", "above my", "phone alone", "phone standalone", "take the phone", "exceeds strict budget", "do ₹12,000", "do 12000", "can do 12000", "do ₹11,800", "do 11800"])
                 
                 if is_counter_from_buyer:
                     action = "ACCEPT"
@@ -822,6 +843,16 @@ class MockProvider(LLMProvider):
                     basket_items = [
                         BasketItemSchema(product_id=41, name="Samsung Galaxy A15", quantity=1, original_price=Decimal("12999.00"), negotiated_price=Decimal("12000.00"), is_primary=True)
                     ]
+                elif "hold" in prompt_lower or "cannot support" in prompt_lower or "holding previous offer" in prompt_lower:
+                    action = "COUNTER"
+                    unit_price = Decimal("11999.00")
+                    total_amount = Decimal("11999.00")
+                    rationale = "Holding at previous standalone offer of ₹11,999 for Samsung Galaxy A15."
+                    message = "I need to hold at my previous standalone offer of ₹11,999 for the Samsung Galaxy A15. If that works for you, we have a deal."
+                    margin_check = "Margin check: PASSED"
+                    basket_items = [
+                        BasketItemSchema(product_id=41, name="Samsung Galaxy A15", quantity=1, original_price=Decimal("12999.00"), negotiated_price=Decimal("11999.00"), is_primary=True)
+                    ]
                 elif is_standalone_req:
                     if "12500.00" in prompt_lower or "12500" in prompt_lower:
                         action = "ACCEPT"
@@ -829,6 +860,13 @@ class MockProvider(LLMProvider):
                         total_amount = Decimal("12500.00")
                         rationale = "Accepting standalone phone offer of 12500."
                         message = "Deal! I accept ₹12,500 for the standalone Samsung Galaxy A15."
+                        margin_check = "Margin check: PASSED"
+                    elif "11999" in prompt_lower or "11,999" in prompt_lower:
+                        action = "COUNTER"
+                        unit_price = Decimal("11999.00")
+                        total_amount = Decimal("11999.00")
+                        rationale = "Countering with standalone phone offer of 11,999."
+                        message = "I can offer the Samsung Galaxy A15 for ₹11,999 on its own."
                         margin_check = "Margin check: PASSED"
                     else:
                         action = "COUNTER"
