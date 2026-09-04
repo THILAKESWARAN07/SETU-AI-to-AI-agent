@@ -71,9 +71,12 @@ class MerchantDecision(BaseModel):
 
 
 class ProviderExecutionMetadata(BaseModel):
-    provider_used: str = Field(..., description="Provider used: 'gemini', 'mock', or 'openai'")
+    provider_used: str = Field(..., description="Provider used: 'gemini', 'openrouter', 'groq', 'mock'")
+    provider_type: str = Field(default="real_llm", description="'real_llm' or 'deterministic_fallback'")
     model_name: Optional[str] = Field(default=None, description="Model identifier used")
+    agent_role: Optional[str] = Field(default=None, description="'buyer', 'merchant', or 'auxiliary'")
     fallback_used: bool = Field(default=False, description="Whether fallback provider was engaged")
+    fallback_depth: int = Field(default=0, description="0 for primary, 1 for 1st fallback, etc.")
     fallback_reason: Optional[str] = Field(default=None, description="Reason/error for falling back")
     response_latency_ms: float = Field(default=0.0, description="Response time in milliseconds")
 
@@ -81,8 +84,9 @@ class ProviderExecutionMetadata(BaseModel):
 # --- PROVIDER INTERFACE ---
 
 class LLMProvider(ABC):
-    def __init__(self):
+    def __init__(self, agent_role: Optional[str] = None):
         self.last_execution_metadata: Optional[ProviderExecutionMetadata] = None
+        self.agent_role = agent_role
 
     @property
     def agent_mode(self) -> str:
@@ -120,8 +124,8 @@ class MockProvider(LLMProvider):
     """
     Deterministic Mock LLM Provider that allows testing without external LLM APIs.
     """
-    def __init__(self):
-        super().__init__()
+    def __init__(self, agent_role: Optional[str] = None):
+        super().__init__(agent_role=agent_role)
 
     @property
     def agent_mode(self) -> str:
@@ -1067,409 +1071,721 @@ class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str, model_name: Optional[str] = None):
         super().__init__()
         self.api_key = api_key
-        self._model_name = model_name or os.getenv("LLM_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite"
+        self._model_name = model_name or os.getenv("BUYER_LLM_MODEL") or os.getenv("LLM_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite"
+        self.client = None
+        self.legacy_genai = None
+
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
-            self.genai = genai
-        except ImportError:
-            self.genai = None
+            from google import genai
+            self.client = genai.Client(api_key=self.api_key)
+        except Exception:
+            try:
+                import google.generativeai as genai_legacy
+                genai_legacy.configure(api_key=self.api_key)
+                self.legacy_genai = genai_legacy
+            except Exception:
+                pass
 
     def generate_response(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
-        if not self.genai:
-            raise ImportError("google-generativeai package is not installed. Run 'pip install google-generativeai'.")
+        if not self.client and not self.legacy_genai:
+            raise ImportError("Neither google-genai nor google-generativeai package is available.")
         
         import time
         start_t = time.perf_counter()
-        
-        # Non-blocking spacer to respect rate limits
-        time.sleep(0.1)
+        time.sleep(0.05)
 
-        # Call Google Gemini API
-        model = self.genai.GenerativeModel(self.model_name, system_instruction=system_instruction)
-        max_retries = 3
-        response = None
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "3"))
+        response_text = ""
+
         for attempt in range(max_retries):
             try:
-                response = model.generate_content(prompt)
-                break
+                if self.client:
+                    from google.genai import types
+                    cfg = types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                    )
+                    resp = self.client.models.generate_content(
+                        model=self.model_name,
+                        contents=prompt,
+                        config=cfg
+                    )
+                    response_text = resp.text or ""
+                    break
+                else:
+                    model = self.legacy_genai.GenerativeModel(self.model_name, system_instruction=system_instruction)
+                    resp = model.generate_content(prompt)
+                    response_text = resp.text or ""
+                    break
             except Exception as e:
                 err_str = str(e)
-                if ("ResourceExhausted" in err_str or "429" in err_str) and attempt < max_retries - 1:
-                    wait_sec = 12.0 * (attempt + 1)
+                if ("ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower()) and attempt < max_retries - 1:
+                    wait_sec = 8.0 * (attempt + 1)
                     match = re.search(r'retry in\s+([\d\.]+)\s*s', err_str, re.IGNORECASE)
                     if match:
                         try:
-                            wait_sec = min(float(match.group(1)) + 1.5, 60.0)
+                            wait_sec = min(float(match.group(1)) + 1.0, 30.0)
                         except Exception:
                             pass
-                    logger.warning(f"GeminiProvider 429 rate limit hit. Backing off for {wait_sec:.1f}s (retry {attempt+1}/{max_retries})...")
+                    logger.warning(f"GeminiProvider rate limit hit ({err_str[:120]}). Backing off {wait_sec:.1f}s (retry {attempt+1}/{max_retries})...")
                     time.sleep(wait_sec)
                 else:
                     raise e
-                    
+
         latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
         self.last_execution_metadata = ProviderExecutionMetadata(
             provider_used="gemini",
+            provider_type="real_llm",
             model_name=self.model_name,
             fallback_used=False,
+            fallback_depth=0,
             fallback_reason=None,
             response_latency_ms=latency_ms
         )
-        return {"text": response.text, "tool_calls": []}
+        return {"text": response_text, "tool_calls": []}
 
     def generate_structured_response(self, prompt: str, system_instruction: str, schema_class: Type[BaseModel]) -> BaseModel:
-        if not self.genai:
-            raise ImportError("google-generativeai package is not installed.")
+        if not self.client and not self.legacy_genai:
+            raise ImportError("Neither google-genai nor google-generativeai package is available.")
         
         import time
         start_t = time.perf_counter()
-        
-        # Non-blocking spacer to respect rate limits
-        time.sleep(0.1)
+        time.sleep(0.05)
 
-        # Clean Pydantic schema dict to match Google Generative AI Schema proto requirements
-        raw_schema = schema_class.model_json_schema() if hasattr(schema_class, "model_json_schema") else schema_class.schema()
-        defs = raw_schema.get("$defs", raw_schema.get("definitions", {}))
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "3"))
+        parsed_data = None
 
-        def resolve_refs(node: Any) -> Any:
-            if isinstance(node, list):
-                return [resolve_refs(x) for x in node]
-            if not isinstance(node, dict):
-                return node
-            if "$ref" in node:
-                ref_path = node["$ref"].split("/")
-                ref_name = ref_path[-1]
-                if ref_name in defs:
-                    merged = defs[ref_name].copy()
-                    if "description" in node:
-                        merged["description"] = node["description"]
-                    return resolve_refs(merged)
-            return {k: resolve_refs(v) for k, v in node.items()}
-
-        inlined_schema = resolve_refs(raw_schema)
-        
-        def clean_schema_dict(node: Any) -> Any:
-            if isinstance(node, list):
-                return [clean_schema_dict(x) for x in node]
-            if not isinstance(node, dict):
-                return node
-            if "anyOf" in node:
-                non_null = [x for x in node["anyOf"] if isinstance(x, dict) and x.get("type") != "null"]
-                if non_null:
-                    target = non_null[0].copy()
-                    if "description" in node:
-                        target["description"] = node["description"]
-                    node = target
-                else:
-                    node = {"type": "string"}
-            if not isinstance(node, dict):
-                return node
-            allowed = {"type", "format", "description", "nullable", "enum", "properties", "required", "items"}
-            cleaned = {}
-            for k, v in node.items():
-                if k in allowed:
-                    if k == "properties" and isinstance(v, dict):
-                        cleaned[k] = {name: clean_schema_dict(val) for name, val in v.items()}
-                    elif k == "items" and isinstance(v, dict):
-                        cleaned[k] = clean_schema_dict(v)
+        if self.client:
+            from google.genai import types
+            config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                response_mime_type="application/json",
+                response_schema=schema_class,
+            )
+            for attempt in range(max_retries):
+                try:
+                    resp = self.client.models.generate_content(
+                        model=self.model_name,
+                        contents=prompt,
+                        config=config
+                    )
+                    raw_text = resp.text or ""
+                    parsed_data = json.loads(raw_text)
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    if ("ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower()) and attempt < max_retries - 1:
+                        wait_sec = 8.0 * (attempt + 1)
+                        match = re.search(r'retry in\s+([\d\.]+)\s*s', err_str, re.IGNORECASE)
+                        if match:
+                            try:
+                                wait_sec = min(float(match.group(1)) + 1.0, 30.0)
+                            except Exception:
+                                pass
+                        logger.warning(f"GeminiProvider structured 429 rate limit hit. Backing off {wait_sec:.1f}s (retry {attempt+1}/{max_retries})...")
+                        time.sleep(wait_sec)
                     else:
-                        cleaned[k] = v
-            return cleaned
+                        raise e
+        else:
+            raw_schema = schema_class.model_json_schema() if hasattr(schema_class, "model_json_schema") else schema_class.schema()
+            defs = raw_schema.get("$defs", raw_schema.get("definitions", {}))
 
-        clean_schema = clean_schema_dict(inlined_schema)
-        
-        # Gemini supports structured JSON outputs with response_schema
-        model = self.genai.GenerativeModel(self.model_name, system_instruction=system_instruction)
-        
-        max_retries = 3
-        response = None
-        for attempt in range(max_retries):
-            try:
-                response = model.generate_content(
-                    prompt,
-                    generation_config={"response_mime_type": "application/json", "response_schema": clean_schema}
-                )
-                break
-            except Exception as e:
-                err_str = str(e)
-                if ("ResourceExhausted" in err_str or "429" in err_str) and attempt < max_retries - 1:
-                    wait_sec = 12.0 * (attempt + 1)
-                    match = re.search(r'retry in\s+([\d\.]+)\s*s', err_str, re.IGNORECASE)
-                    if match:
-                        try:
-                            wait_sec = min(float(match.group(1)) + 1.5, 60.0)
-                        except Exception:
-                            pass
-                    logger.warning(f"GeminiProvider 429 rate limit hit. Backing off for {wait_sec:.1f}s (retry {attempt+1}/{max_retries})...")
-                    time.sleep(wait_sec)
-                else:
-                    raise e
+            def resolve_refs(node: Any) -> Any:
+                if isinstance(node, list):
+                    return [resolve_refs(x) for x in node]
+                if not isinstance(node, dict):
+                    return node
+                if "$ref" in node:
+                    ref_path = node["$ref"].split("/")
+                    ref_name = ref_path[-1]
+                    if ref_name in defs:
+                        merged = defs[ref_name].copy()
+                        if "description" in node:
+                            merged["description"] = node["description"]
+                        return resolve_refs(merged)
+                return {k: resolve_refs(v) for k, v in node.items()}
 
-        data = json.loads(response.text)
+            inlined_schema = resolve_refs(raw_schema)
+            
+            def clean_schema_dict(node: Any) -> Any:
+                if isinstance(node, list):
+                    return [clean_schema_dict(x) for x in node]
+                if not isinstance(node, dict):
+                    return node
+                if "anyOf" in node:
+                    non_null = [x for x in node["anyOf"] if isinstance(x, dict) and x.get("type") != "null"]
+                    if non_null:
+                        target = non_null[0].copy()
+                        if "description" in node:
+                            target["description"] = node["description"]
+                        node = target
+                    else:
+                        node = {"type": "string"}
+                if not isinstance(node, dict):
+                    return node
+                allowed = {"type", "format", "description", "nullable", "enum", "properties", "required", "items"}
+                cleaned = {}
+                for k, v in node.items():
+                    if k in allowed:
+                        if k == "properties" and isinstance(v, dict):
+                            cleaned[k] = {name: clean_schema_dict(val) for name, val in v.items()}
+                        elif k == "items" and isinstance(v, dict):
+                            cleaned[k] = clean_schema_dict(v)
+                        else:
+                            cleaned[k] = v
+                return cleaned
+
+            clean_schema = clean_schema_dict(inlined_schema)
+            model = self.legacy_genai.GenerativeModel(self.model_name, system_instruction=system_instruction)
+            
+            for attempt in range(max_retries):
+                try:
+                    resp = model.generate_content(
+                        prompt,
+                        generation_config={"response_mime_type": "application/json", "response_schema": clean_schema}
+                    )
+                    parsed_data = json.loads(resp.text)
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    if ("ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower()) and attempt < max_retries - 1:
+                        wait_sec = 8.0 * (attempt + 1)
+                        match = re.search(r'retry in\s+([\d\.]+)\s*s', err_str, re.IGNORECASE)
+                        if match:
+                            try:
+                                wait_sec = min(float(match.group(1)) + 1.0, 30.0)
+                            except Exception:
+                                pass
+                        logger.warning(f"GeminiProvider legacy structured 429 rate limit hit. Backing off {wait_sec:.1f}s (retry {attempt+1}/{max_retries})...")
+                        time.sleep(wait_sec)
+                    else:
+                        raise e
+
         latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
         self.last_execution_metadata = ProviderExecutionMetadata(
             provider_used="gemini",
+            provider_type="real_llm",
             model_name=self.model_name,
             fallback_used=False,
+            fallback_depth=0,
             fallback_reason=None,
             response_latency_ms=latency_ms
         )
-        return schema_class(**data)
+        return schema_class(**parsed_data)
 
 
-class OpenAIProvider(LLMProvider):
+class OpenRouterProvider(LLMProvider):
     @property
     def provider_name(self) -> str:
-        return "OpenAI"
+        return "OpenRouter"
 
     @property
     def model_name(self) -> str:
         return self._model_name
 
-    def __init__(self, api_key: str, model_name: Optional[str] = None):
+    def __init__(self, api_key: str, model_name: Optional[str] = None, base_url: str = "https://openrouter.ai/api/v1"):
         super().__init__()
         self.api_key = api_key
-        self._model_name = model_name or os.getenv("LLM_MODEL") or "gpt-4o-mini"
-        try:
-            import openai
-            self.client = openai.OpenAI(api_key=self.api_key)
-        except ImportError:
-            self.client = None
+        self._model_name = model_name or os.getenv("OPENROUTER_MODEL") or "meta-llama/llama-3.3-70b-instruct:free"
+        self.base_url = base_url.rstrip("/")
 
     def generate_response(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
-        if not self.client:
-            raise ImportError("openai package is not installed. Run 'pip install openai'.")
         import time
+        import httpx
         start_t = time.perf_counter()
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "HTTP-Referer": "https://setu.ai",
+            "X-Title": "SETU AI Commerce Trust Layer",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": self.model_name,
+            "messages": [
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": prompt}
             ]
-        )
+        }
+        
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
+        timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
+        
+        response_text = ""
+        for attempt in range(max_retries + 1):
+            try:
+                with httpx.Client(timeout=timeout_sec) as client:
+                    resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+                    if resp.status_code == 429 and attempt < max_retries:
+                        wait_sec = 2.0 * (attempt + 1)
+                        logger.warning(f"OpenRouterProvider 429 rate limit hit. Backing off {wait_sec}s...")
+                        time.sleep(wait_sec)
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    response_text = data["choices"][0]["message"]["content"] or ""
+                    break
+            except Exception as e:
+                if attempt < max_retries and ("429" in str(e) or "rate" in str(e).lower()):
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                raise e
+
         latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
         self.last_execution_metadata = ProviderExecutionMetadata(
-            provider_used="openai",
+            provider_used="openrouter",
+            provider_type="real_llm",
             model_name=self.model_name,
             fallback_used=False,
+            fallback_depth=0,
             fallback_reason=None,
             response_latency_ms=latency_ms
         )
-        return {"text": response.choices[0].message.content or "", "tool_calls": []}
+        return {"text": response_text, "tool_calls": []}
 
     def generate_structured_response(self, prompt: str, system_instruction: str, schema_class: Type[BaseModel]) -> BaseModel:
-        if not self.client:
-            raise ImportError("openai package is not installed.")
         import time
+        import httpx
         start_t = time.perf_counter()
-        response = self.client.beta.chat.completions.parse(
-            model=self.model_name,
-            messages=[
-                {"role": "system", "content": system_instruction},
+        
+        schema_json = json.dumps(schema_class.model_json_schema() if hasattr(schema_class, "model_json_schema") else schema_class.schema())
+        json_sys = f"{system_instruction}\n\nIMPORTANT: You must output ONLY a valid JSON object matching this schema. Do not wrap in markdown or backticks:\n{schema_json}"
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "HTTP-Referer": "https://setu.ai",
+            "X-Title": "SETU AI Commerce Trust Layer",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": json_sys},
                 {"role": "user", "content": prompt}
             ],
-            response_format=schema_class
-        )
-        parsed = response.choices[0].message.parsed
+            "response_format": {"type": "json_object"}
+        }
+        
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
+        timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
+        
+        parsed = None
+        for attempt in range(max_retries + 1):
+            try:
+                with httpx.Client(timeout=timeout_sec) as client:
+                    resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+                    if resp.status_code == 429 and attempt < max_retries:
+                        wait_sec = 2.0 * (attempt + 1)
+                        logger.warning(f"OpenRouterProvider structured 429 rate limit hit. Backing off {wait_sec}s...")
+                        time.sleep(wait_sec)
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"] or "{}"
+                    cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
+                    cleaned = re.sub(r"\s*```$", "", cleaned.strip())
+                    parsed = schema_class.model_validate_json(cleaned) if hasattr(schema_class, "model_validate_json") else schema_class.parse_raw(cleaned)
+                    break
+            except Exception as e:
+                if attempt < max_retries and ("429" in str(e) or "rate" in str(e).lower()):
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                raise e
+
         if parsed is None:
-            raise ValueError("Failed to parse structured output from OpenAI.")
+            raise ValueError(f"Failed to generate structured response from OpenRouter ({self.model_name})")
+
         latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
         self.last_execution_metadata = ProviderExecutionMetadata(
-            provider_used="openai",
+            provider_used="openrouter",
+            provider_type="real_llm",
             model_name=self.model_name,
             fallback_used=False,
+            fallback_depth=0,
             fallback_reason=None,
             response_latency_ms=latency_ms
         )
         return parsed
 
 
-class FallbackProvider(LLMProvider):
-    """
-    Robust provider decorator that attempts the primary live provider with a strict timeout.
-    If the primary provider fails (e.g. 429 Quota Exhausted, 401 Unauthorized, Network timeout),
-    it smoothly falls back to the deterministic MockProvider and records provider metadata.
-    """
-    def __init__(self, primary: LLMProvider, fallback: Optional[LLMProvider] = None, timeout_seconds: float = 10.0):
-        super().__init__()
-        self.primary = primary
-        self.fallback = fallback or MockProvider()
-        self.timeout_seconds = timeout_seconds
-        self.fallback_active = False
-        self.fallback_error: Optional[str] = None
-
-    @property
-    def agent_mode(self) -> str:
-        if self.fallback_active:
-            return "FALLBACK MOCK (Live LLM Fallback)"
-        return self.primary.agent_mode
-
+class GroqProvider(LLMProvider):
     @property
     def provider_name(self) -> str:
-        if self.fallback_active:
-            return f"{self.primary.provider_name} (Fell back to Mock)"
-        return self.primary.provider_name
+        return "Groq"
 
     @property
     def model_name(self) -> str:
-        if self.fallback_active:
-            return f"{self.primary.model_name} -> {self.fallback.model_name}"
-        return self.primary.model_name
+        return self._model_name
+
+    def __init__(self, api_key: str, model_name: Optional[str] = None, base_url: str = "https://api.groq.com/openai/v1"):
+        super().__init__()
+        self.api_key = api_key
+        self._model_name = model_name or os.getenv("GROQ_MODEL") or os.getenv("MERCHANT_LLM_MODEL") or "llama-3.3-70b-versatile"
+        self.base_url = base_url.rstrip("/")
 
     def generate_response(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         import time
+        import httpx
         start_t = time.perf_counter()
-        if self.fallback_active:
-            res = self.fallback.generate_response(prompt, system_instruction, tools)
-            latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
-            self.last_execution_metadata = ProviderExecutionMetadata(
-                provider_used="mock",
-                model_name=self.fallback.model_name,
-                fallback_used=True,
-                fallback_reason=self.fallback_error or "Fallback active from previous failure",
-                response_latency_ms=latency_ms
-            )
-            return res
-
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self.primary.generate_response, prompt, system_instruction, tools)
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt}
+            ]
+        }
+        
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
+        timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
+        
+        response_text = ""
+        for attempt in range(max_retries + 1):
             try:
-                res = future.result(timeout=self.timeout_seconds)
-                latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
-                p_meta = getattr(self.primary, "last_execution_metadata", None)
-                if p_meta:
-                    self.last_execution_metadata = p_meta
-                else:
-                    self.last_execution_metadata = ProviderExecutionMetadata(
-                        provider_used=self.primary.provider_name.lower(),
-                        model_name=self.primary.model_name,
-                        fallback_used=False,
-                        fallback_reason=None,
-                        response_latency_ms=latency_ms
-                    )
-                return res
+                with httpx.Client(timeout=timeout_sec) as client:
+                    resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+                    if resp.status_code == 429 and attempt < max_retries:
+                        wait_sec = 2.0 * (attempt + 1)
+                        logger.warning(f"GroqProvider 429 rate limit hit. Backing off {wait_sec}s...")
+                        time.sleep(wait_sec)
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    response_text = data["choices"][0]["message"]["content"] or ""
+                    break
             except Exception as e:
-                err_msg = f"{type(e).__name__}: {str(e)}"
-                logger.warning(f"Primary provider '{self.primary.provider_name}' failed ({err_msg}). Activating MockProvider fallback.")
-                self.fallback_active = True
-                self.fallback_error = err_msg
-                res = self.fallback.generate_response(prompt, system_instruction, tools)
-                latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
-                self.last_execution_metadata = ProviderExecutionMetadata(
-                    provider_used="mock",
-                    model_name=self.fallback.model_name,
-                    fallback_used=True,
-                    fallback_reason=self.fallback_error,
-                    response_latency_ms=latency_ms
-                )
-                return res
+                if attempt < max_retries and ("429" in str(e) or "rate" in str(e).lower()):
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                raise e
+
+        latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+        self.last_execution_metadata = ProviderExecutionMetadata(
+            provider_used="groq",
+            provider_type="real_llm",
+            model_name=self.model_name,
+            fallback_used=False,
+            fallback_depth=0,
+            fallback_reason=None,
+            response_latency_ms=latency_ms
+        )
+        return {"text": response_text, "tool_calls": []}
 
     def generate_structured_response(self, prompt: str, system_instruction: str, schema_class: Type[BaseModel]) -> BaseModel:
         import time
+        import httpx
         start_t = time.perf_counter()
-        if self.fallback_active:
-            res = self.fallback.generate_structured_response(prompt, system_instruction, schema_class)
-            latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
-            self.last_execution_metadata = ProviderExecutionMetadata(
-                provider_used="mock",
-                model_name=self.fallback.model_name,
-                fallback_used=True,
-                fallback_reason=self.fallback_error or "Fallback active from previous failure",
-                response_latency_ms=latency_ms
-            )
-            return res
-
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self.primary.generate_structured_response, prompt, system_instruction, schema_class)
+        
+        schema_json = json.dumps(schema_class.model_json_schema() if hasattr(schema_class, "model_json_schema") else schema_class.schema())
+        json_sys = f"{system_instruction}\n\nIMPORTANT: You must output ONLY a valid JSON object matching this schema. Do not wrap in markdown or backticks:\n{schema_json}"
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": json_sys},
+                {"role": "user", "content": prompt}
+            ],
+            "response_format": {"type": "json_object"}
+        }
+        
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
+        timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
+        
+        parsed = None
+        for attempt in range(max_retries + 1):
             try:
-                res = future.result(timeout=self.timeout_seconds)
-                latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
-                p_meta = getattr(self.primary, "last_execution_metadata", None)
-                if p_meta:
-                    self.last_execution_metadata = p_meta
-                else:
-                    self.last_execution_metadata = ProviderExecutionMetadata(
-                        provider_used=self.primary.provider_name.lower(),
-                        model_name=self.primary.model_name,
-                        fallback_used=False,
-                        fallback_reason=None,
-                        response_latency_ms=latency_ms
-                    )
-                return res
+                with httpx.Client(timeout=timeout_sec) as client:
+                    resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+                    if resp.status_code == 429 and attempt < max_retries:
+                        wait_sec = 2.0 * (attempt + 1)
+                        logger.warning(f"GroqProvider structured 429 rate limit hit. Backing off {wait_sec}s...")
+                        time.sleep(wait_sec)
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"] or "{}"
+                    cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
+                    cleaned = re.sub(r"\s*```$", "", cleaned.strip())
+                    parsed = schema_class.model_validate_json(cleaned) if hasattr(schema_class, "model_validate_json") else schema_class.parse_raw(cleaned)
+                    break
             except Exception as e:
-                err_msg = f"{type(e).__name__}: {str(e)}"
-                logger.warning(f"Primary provider '{self.primary.provider_name}' structured response failed ({err_msg}). Activating MockProvider fallback.")
-                self.fallback_active = True
-                self.fallback_error = err_msg
-                res = self.fallback.generate_structured_response(prompt, system_instruction, schema_class)
-                latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+                if attempt < max_retries and ("429" in str(e) or "rate" in str(e).lower()):
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                raise e
+
+        if parsed is None:
+            raise ValueError(f"Failed to generate structured response from Groq ({self.model_name})")
+
+        latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+        self.last_execution_metadata = ProviderExecutionMetadata(
+            provider_used="groq",
+            provider_type="real_llm",
+            model_name=self.model_name,
+            fallback_used=False,
+            fallback_depth=0,
+            fallback_reason=None,
+            response_latency_ms=latency_ms
+        )
+        return parsed
+
+
+class MultiFallbackProvider(LLMProvider):
+    """
+    Multi-stage fallback wrapper that evaluates providers in priority order.
+    Maintains independent agent role context, tracks fallback depth and reasons.
+    """
+    def __init__(self, providers: List[LLMProvider], timeout_seconds: float = 12.0, agent_role: Optional[str] = None):
+        super().__init__()
+        if not providers:
+            providers = [MockProvider()]
+        self.providers = providers
+        self.timeout_seconds = timeout_seconds
+        self.agent_role = agent_role
+        self.active_provider_idx = 0
+        self.last_failure_reason: Optional[str] = None
+
+    @property
+    def fallback_active(self) -> bool:
+        return self.active_provider_idx > 0
+
+    @property
+    def fallback_error(self) -> Optional[str]:
+        if self.last_execution_metadata and self.last_execution_metadata.fallback_reason:
+            return self.last_execution_metadata.fallback_reason
+        return self.last_failure_reason
+
+    @property
+    def agent_mode(self) -> str:
+        current = self.providers[min(self.active_provider_idx, len(self.providers) - 1)]
+        if isinstance(current, MockProvider):
+            return "OFFLINE MOCK" if self.active_provider_idx == 0 else "FALLBACK MOCK"
+        return f"LIVE LLM ({current.provider_name})"
+
+    @property
+    def provider_name(self) -> str:
+        names = [p.provider_name for p in self.providers]
+        return " -> ".join(names)
+
+    @property
+    def model_name(self) -> str:
+        current = self.providers[min(self.active_provider_idx, len(self.providers) - 1)]
+        return current.model_name
+
+    def generate_response(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+        import concurrent.futures
+        import time
+
+        errors = []
+        overall_start_t = time.perf_counter()
+        for depth, provider in enumerate(self.providers):
+            try:
+                # If pure MockProvider, run synchronously without thread overhead
+                if type(provider) is MockProvider:
+                    res = provider.generate_response(prompt, system_instruction, tools)
+                else:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(provider.generate_response, prompt, system_instruction, tools)
+                        res = future.result(timeout=self.timeout_seconds)
+
+                latency_ms = round((time.perf_counter() - overall_start_t) * 1000, 2)
+                p_meta = getattr(provider, "last_execution_metadata", None)
+                provider_used = p_meta.provider_used if p_meta else provider.provider_name.lower()
+                model_used = p_meta.model_name if p_meta else provider.model_name
+                is_mock = isinstance(provider, MockProvider)
+
                 self.last_execution_metadata = ProviderExecutionMetadata(
-                    provider_used="mock",
-                    model_name=self.fallback.model_name,
-                    fallback_used=True,
-                    fallback_reason=self.fallback_error,
+                    provider_used=provider_used,
+                    provider_type="deterministic_fallback" if is_mock else "real_llm",
+                    model_name=model_used,
+                    agent_role=self.agent_role,
+                    fallback_used=depth > 0,
+                    fallback_depth=depth,
+                    fallback_reason="; ".join(errors) if depth > 0 else None,
                     response_latency_ms=latency_ms
                 )
+                self.active_provider_idx = depth
                 return res
+            except Exception as e:
+                err_msg = f"{provider.provider_name}: {type(e).__name__}({str(e)[:100]})"
+                errors.append(err_msg)
+                self.last_failure_reason = err_msg
+                logger.warning(f"Provider {provider.provider_name} at depth {depth} failed for {self.agent_role}: {err_msg}")
+                continue
+
+        raise RuntimeError(f"All providers in fallback chain failed: {'; '.join(errors)}")
+
+    def generate_structured_response(self, prompt: str, system_instruction: str, schema_class: Type[BaseModel]) -> BaseModel:
+        import concurrent.futures
+        import time
+
+        errors = []
+        overall_start_t = time.perf_counter()
+        for depth, provider in enumerate(self.providers):
+            try:
+                if type(provider) is MockProvider:
+                    res = provider.generate_structured_response(prompt, system_instruction, schema_class)
+                else:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(provider.generate_structured_response, prompt, system_instruction, schema_class)
+                        res = future.result(timeout=self.timeout_seconds)
+
+                latency_ms = round((time.perf_counter() - overall_start_t) * 1000, 2)
+                p_meta = getattr(provider, "last_execution_metadata", None)
+                provider_used = p_meta.provider_used if p_meta else provider.provider_name.lower()
+                model_used = p_meta.model_name if p_meta else provider.model_name
+                is_mock = isinstance(provider, MockProvider)
+
+                self.last_execution_metadata = ProviderExecutionMetadata(
+                    provider_used=provider_used,
+                    provider_type="deterministic_fallback" if is_mock else "real_llm",
+                    model_name=model_used,
+                    agent_role=self.agent_role,
+                    fallback_used=depth > 0,
+                    fallback_depth=depth,
+                    fallback_reason="; ".join(errors) if depth > 0 else None,
+                    response_latency_ms=latency_ms
+                )
+                self.active_provider_idx = depth
+                return res
+            except Exception as e:
+                err_msg = f"{provider.provider_name}: {type(e).__name__}({str(e)[:100]})"
+                errors.append(err_msg)
+                self.last_failure_reason = err_msg
+                logger.warning(f"Provider {provider.provider_name} at depth {depth} failed structured response for {self.agent_role}: {err_msg}")
+                continue
+
+        raise RuntimeError(f"All providers in fallback chain failed: {'; '.join(errors)}")
+
+
+# Legacy FallbackProvider alias wrapping MultiFallbackProvider
+class FallbackProvider(MultiFallbackProvider):
+    def __init__(self, primary: LLMProvider, fallback: Optional[LLMProvider] = None, timeout_seconds: float = 12.0):
+        super().__init__(providers=[primary, fallback or MockProvider()], timeout_seconds=timeout_seconds)
+
+
+class AgentProviderRouter:
+    """
+    Router that constructs isolated provider instances and fallback chains per agent role.
+    """
+    @staticmethod
+    def create_single_provider(provider_type: str, model_name: Optional[str] = None) -> Optional[LLMProvider]:
+        provider_type = provider_type.strip().lower()
+        if not provider_type:
+            return None
+
+        if provider_type == "gemini":
+            key = os.getenv("LLM_API_KEY") or os.getenv("GEMINI_API_KEY")
+            if key:
+                try:
+                    return GeminiProvider(api_key=key, model_name=model_name or os.getenv("GEMINI_MODEL") or os.getenv("BUYER_LLM_MODEL") or os.getenv("LLM_MODEL"))
+                except Exception as e:
+                    logger.warning(f"Could not initialize GeminiProvider: {e}")
+            return None
+
+        elif provider_type == "openrouter":
+            key = os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+            if key:
+                try:
+                    return OpenRouterProvider(api_key=key, model_name=model_name or os.getenv("OPENROUTER_MODEL") or os.getenv("LLM_MODEL"))
+                except Exception as e:
+                    logger.warning(f"Could not initialize OpenRouterProvider: {e}")
+            return None
+
+        elif provider_type == "groq":
+            key = os.getenv("LLM_API_KEY") or os.getenv("GROQ_API_KEY")
+            if key:
+                try:
+                    return GroqProvider(api_key=key, model_name=model_name or os.getenv("GROQ_MODEL") or os.getenv("LLM_MODEL"))
+                except Exception as e:
+                    logger.warning(f"Could not initialize GroqProvider: {e}")
+            return None
+
+        elif provider_type == "mock":
+            return MockProvider()
+
+        return None
+
+    @classmethod
+    def get_provider_for_agent(cls, role: str = "buyer") -> LLMProvider:
+        from backend.app.config import settings
+        role = role.lower()
+        timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", str(getattr(settings, "LLM_TIMEOUT_SECONDS", 12.0))))
+
+        if role == "buyer":
+            primary_name = os.getenv("BUYER_LLM_PROVIDER") or os.getenv("LLM_PROVIDER", settings.BUYER_LLM_PROVIDER)
+            primary_model = os.getenv("BUYER_LLM_MODEL") or os.getenv("LLM_MODEL", settings.BUYER_LLM_MODEL)
+            fallbacks_raw = os.getenv("BUYER_LLM_FALLBACKS", settings.BUYER_LLM_FALLBACKS)
+        elif role == "merchant":
+            primary_name = os.getenv("MERCHANT_LLM_PROVIDER") or os.getenv("LLM_PROVIDER", settings.MERCHANT_LLM_PROVIDER)
+            primary_model = os.getenv("MERCHANT_LLM_MODEL") or os.getenv("LLM_MODEL", settings.MERCHANT_LLM_MODEL)
+            fallbacks_raw = os.getenv("MERCHANT_LLM_FALLBACKS", settings.MERCHANT_LLM_FALLBACKS)
+        else:
+            primary_name = os.getenv("AUXILIARY_LLM_PROVIDER") or os.getenv("LLM_PROVIDER", settings.AUXILIARY_LLM_PROVIDER)
+            primary_model = os.getenv("AUXILIARY_LLM_MODEL") or os.getenv("LLM_MODEL", settings.AUXILIARY_LLM_MODEL)
+            fallbacks_raw = os.getenv("AUXILIARY_LLM_FALLBACKS", settings.AUXILIARY_LLM_FALLBACKS)
+
+        chain: List[LLMProvider] = []
+        
+        # 1. Primary provider
+        primary_inst = cls.create_single_provider(primary_name, primary_model)
+        if primary_inst:
+            chain.append(primary_inst)
+
+        # 2. Fallbacks (only if fallback is allowed)
+        fallback_allowed = os.getenv("LLM_FALLBACK_TO_MOCK", str(settings.LLM_FALLBACK_TO_MOCK)).lower() in ("true", "1", "yes")
+        if fallback_allowed:
+            fallback_names = [f.strip() for f in fallbacks_raw.split(",") if f.strip()]
+            for fb_name in fallback_names:
+                if fb_name.lower() == primary_name.lower() and primary_inst:
+                    continue
+                fb_inst = cls.create_single_provider(fb_name)
+                if fb_inst:
+                    chain.append(fb_inst)
+
+            if not any(isinstance(p, MockProvider) for p in chain):
+                chain.append(MockProvider(agent_role=role))
+            if len(chain) == 1 and isinstance(chain[0], MockProvider):
+                chain[0].agent_role = role
+                return chain[0]
+        else:
+            if not chain:
+                raise ValueError(f"No configured LLM provider available for role '{role}' and LLM_FALLBACK_TO_MOCK is disabled.")
+            if len(chain) == 1:
+                chain[0].agent_role = role
+                return chain[0]
+
+        for p in chain:
+            if not getattr(p, "agent_role", None):
+                p.agent_role = role
+
+        return MultiFallbackProvider(providers=chain, timeout_seconds=timeout_sec, agent_role=role)
+
+
+def get_provider_for_agent(role: str = "buyer") -> LLMProvider:
+    """
+    Factory function returning an isolated MultiFallbackProvider chain for the given agent role.
+    """
+    return AgentProviderRouter.get_provider_for_agent(role)
+
+
+def get_provider_for_task(task_name: str = "auxiliary") -> LLMProvider:
+    """
+    Factory function returning provider for auxiliary non-critical tasks.
+    """
+    return AgentProviderRouter.get_provider_for_agent("auxiliary")
 
 
 def get_provider() -> LLMProvider:
     """
-    Factory function to initialize the LLM Provider based on env variables.
+    Backward-compatible factory returning the Buyer agent provider chain.
     """
-    from backend.app.config import settings
-    provider_type = os.getenv("LLM_PROVIDER", settings.LLM_PROVIDER).lower()
-    
-    fallback_env = os.getenv("LLM_FALLBACK_TO_MOCK")
-    if fallback_env is not None:
-        fallback_allowed = fallback_env.lower() in ("true", "1", "yes")
-    else:
-        fallback_allowed = settings.LLM_FALLBACK_TO_MOCK
-    
-    timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", str(getattr(settings, "LLM_TIMEOUT_SECONDS", 10.0))))
-    
-    api_key = os.getenv("LLM_API_KEY", settings.LLM_API_KEY)
-    model_name = os.getenv("LLM_MODEL", settings.LLM_MODEL)
+    return get_provider_for_agent("buyer")
 
-    if provider_type == "gemini":
-        gemini_key = api_key or os.getenv("GEMINI_API_KEY", settings.GEMINI_API_KEY)
-        if gemini_key:
-            try:
-                gemini_inst = GeminiProvider(gemini_key, model_name=model_name)
-                if fallback_allowed:
-                    return FallbackProvider(primary=gemini_inst, fallback=MockProvider(), timeout_seconds=timeout_sec)
-                return gemini_inst
-            except Exception as e:
-                logger.error(f"Failed to initialize GeminiProvider: {e}")
-                if not fallback_allowed:
-                    raise e
-        else:
-            logger.warning("GEMINI_API_KEY not configured. Falling back to MockProvider.")
-            if not fallback_allowed:
-                raise ValueError("Gemini API key not configured and LLM_FALLBACK_TO_MOCK is disabled.")
-            
-    elif provider_type == "openai":
-        openai_key = api_key or os.getenv("OPENAI_API_KEY", settings.OPENAI_API_KEY)
-        if openai_key:
-            try:
-                openai_inst = OpenAIProvider(openai_key, model_name=model_name)
-                if fallback_allowed:
-                    return FallbackProvider(primary=openai_inst, fallback=MockProvider(), timeout_seconds=timeout_sec)
-                return openai_inst
-            except Exception as e:
-                logger.error(f"Failed to initialize OpenAIProvider: {e}")
-                if not fallback_allowed:
-                    raise e
-        else:
-            logger.warning("OPENAI_API_KEY not configured. Falling back to MockProvider.")
-            if not fallback_allowed:
-                raise ValueError("OpenAI API key not configured and LLM_FALLBACK_TO_MOCK is disabled.")
-
-    if provider_type != "mock" and not fallback_allowed:
-        raise ValueError(f"LLM provider type '{provider_type}' is unavailable and fallback is disabled.")
-
-    return MockProvider()

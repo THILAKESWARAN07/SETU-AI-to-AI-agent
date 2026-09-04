@@ -57,9 +57,12 @@ interface ChatMessage {
   timestamp: string;
   basketItems?: any[];
   isFinal?: boolean;
-  providerUsed?: 'gemini' | 'mock' | 'openai' | string;
+  providerUsed?: 'gemini' | 'openrouter' | 'groq' | 'mock' | string;
+  providerType?: 'real_llm' | 'deterministic_fallback';
+  agentRole?: string;
   modelName?: string;
   fallbackUsed?: boolean;
+  fallbackDepth?: number;
   fallbackReason?: string | null;
   responseLatencyMs?: number;
 }
@@ -96,8 +99,11 @@ const mapEventToMessage = (evt: ConversationEvent, idx: number): ChatMessage => 
     basketItems: evt.basket_items,
     isFinal: evt.is_final,
     providerUsed: evt.provider_used,
+    providerType: evt.provider_type,
+    agentRole: evt.agent_role,
     modelName: evt.model_name,
     fallbackUsed: evt.fallback_used,
+    fallbackDepth: evt.fallback_depth,
     fallbackReason: evt.fallback_reason,
     responseLatencyMs: evt.response_latency_ms
   };
@@ -461,11 +467,11 @@ export default function Negotiation() {
             </span>
           )}
           <span className="system-status-tag font-mono" style={{
-            background: result?.execution_mode?.includes('LIVE') ? 'rgba(16, 185, 129, 0.15)' : result?.execution_mode?.includes('FALLBACK') ? 'rgba(245, 158, 11, 0.15)' : 'rgba(107, 114, 128, 0.15)',
-            color: result?.execution_mode?.includes('LIVE') ? '#10b981' : result?.execution_mode?.includes('FALLBACK') ? '#fbbf24' : '#9ca3af',
-            border: result?.execution_mode?.includes('LIVE') ? '1px solid rgba(16, 185, 129, 0.3)' : result?.execution_mode?.includes('FALLBACK') ? '1px solid rgba(245, 158, 11, 0.3)' : '1px solid rgba(107, 114, 128, 0.3)'
+            background: (result?.provider_summary?.real_llm_calls && result.provider_summary.real_llm_calls > 0) || result?.execution_mode?.includes('LIVE') ? 'rgba(16, 185, 129, 0.15)' : result?.execution_mode?.includes('FALLBACK') ? 'rgba(245, 158, 11, 0.15)' : 'rgba(107, 114, 128, 0.15)',
+            color: (result?.provider_summary?.real_llm_calls && result.provider_summary.real_llm_calls > 0) || result?.execution_mode?.includes('LIVE') ? '#10b981' : result?.execution_mode?.includes('FALLBACK') ? '#fbbf24' : '#9ca3af',
+            border: (result?.provider_summary?.real_llm_calls && result.provider_summary.real_llm_calls > 0) || result?.execution_mode?.includes('LIVE') ? '1px solid rgba(16, 185, 129, 0.3)' : result?.execution_mode?.includes('FALLBACK') ? '1px solid rgba(245, 158, 11, 0.3)' : '1px solid rgba(107, 114, 128, 0.3)'
           }}>
-            AI MODE: {result?.execution_mode?.includes('FALLBACK') ? 'DETERMINISTIC FALLBACK' : result?.execution_mode || 'AUTONOMOUS AI'}
+            AI MODE: {result?.provider_summary?.real_llm_calls && result.provider_summary.real_llm_calls > 0 ? 'LIVE MULTI-PROVIDER' : result?.execution_mode?.includes('FALLBACK') ? 'DETERMINISTIC FALLBACK' : result?.execution_mode || 'AUTONOMOUS AI'}
           </span>
           <span className="system-status-tag font-mono" style={{ color: 'var(--primary)', borderColor: 'rgba(100, 75, 255, 0.3)', background: 'rgba(100, 75, 255, 0.05)' }}>
             SETU POLICY SANDBOX
@@ -598,6 +604,44 @@ export default function Negotiation() {
                             )}
                           </span>
                         )}
+                        {msg.providerUsed === 'openrouter' && !msg.fallbackUsed && (
+                          <span className="font-mono" style={{ 
+                            fontSize: '0.65rem', 
+                            padding: '2px 7px', 
+                            borderRadius: '4px', 
+                            background: 'rgba(168, 85, 247, 0.15)', 
+                            color: '#c084fc', 
+                            border: '1px solid rgba(168, 85, 247, 0.3)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}>
+                            <span>🧠</span>
+                            <span>{msg.modelName || 'OpenRouter'}</span>
+                            {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
+                              <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
+                            )}
+                          </span>
+                        )}
+                        {msg.providerUsed === 'groq' && !msg.fallbackUsed && (
+                          <span className="font-mono" style={{ 
+                            fontSize: '0.65rem', 
+                            padding: '2px 7px', 
+                            borderRadius: '4px', 
+                            background: 'rgba(249, 115, 22, 0.15)', 
+                            color: '#fb923c', 
+                            border: '1px solid rgba(249, 115, 22, 0.3)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}>
+                            <span>⚡</span>
+                            <span>{msg.modelName || 'Groq'}</span>
+                            {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
+                              <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
+                            )}
+                          </span>
+                        )}
                         {msg.fallbackUsed && (
                           <span className="font-mono" style={{ 
                             fontSize: '0.65rem', 
@@ -609,9 +653,9 @@ export default function Negotiation() {
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: '3px'
-                          }} title={msg.fallbackReason || 'Primary LLM timed out / unavailable'}>
-                            <span>🧪</span>
-                            <span>Mock Fallback</span>
+                          }} title={msg.fallbackReason || 'Primary LLM fallback engaged'}>
+                            <span>⚙️</span>
+                            <span>{msg.providerUsed === 'mock' ? 'Deterministic Fallback' : `${msg.providerUsed} (Fallback)`}</span>
                             {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
                               <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
                             )}

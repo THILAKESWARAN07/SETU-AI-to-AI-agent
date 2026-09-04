@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 
-from backend.app.agents.provider import LLMProvider, MerchantOffer, Negotiation, MerchantDecision, get_provider
+from backend.app.agents.provider import LLMProvider, MerchantOffer, Negotiation, MerchantDecision, get_provider, get_provider_for_agent
 from backend.app.agents.tools import (
     ToolRegistry, search_catalog_tool, search_catalog_schema,
     view_product_tool, get_product_details_schema,
@@ -32,7 +32,7 @@ class MerchantAgent:
                 "matching company pricing margins and policies."
             )
             
-        self.provider = provider or get_provider()
+        self.provider = provider or get_provider_for_agent("merchant")
         self.registry = ToolRegistry()
         self.registry.register_tool("get_inventory", get_inventory_tool, get_inventory_schema)
         self.registry.register_tool("get_product_price", get_product_price_tool, get_product_price_schema)

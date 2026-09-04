@@ -28,14 +28,33 @@ class Settings:
     PAYMENT_MODE: str = os.getenv("PAYMENT_MODE", "mock")
     RAZORPAY_MODE: str = os.getenv("RAZORPAY_MODE", "test")
 
-    # LLM Settings
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "mock")  # Options: mock, gemini, openai
-    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    # LLM General Settings
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")  # Default global fallback provider
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite")
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "")
     LLM_FALLBACK_TO_MOCK: bool = os.getenv("LLM_FALLBACK_TO_MOCK", "True").lower() in ("true", "1", "yes")
-    LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "10.0"))
+    LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
+    LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
+
+    # Role-Specific LLM Settings (100% Free / Free-Tier Providers)
+    BUYER_LLM_PROVIDER: str = os.getenv("BUYER_LLM_PROVIDER", "gemini")
+    BUYER_LLM_MODEL: str = os.getenv("BUYER_LLM_MODEL", "gemini-3.1-flash-lite")
+    BUYER_LLM_FALLBACKS: str = os.getenv("BUYER_LLM_FALLBACKS", "openrouter,groq,mock")
+
+    MERCHANT_LLM_PROVIDER: str = os.getenv("MERCHANT_LLM_PROVIDER", "groq")
+    MERCHANT_LLM_MODEL: str = os.getenv("MERCHANT_LLM_MODEL", "llama-3.3-70b-versatile")
+    MERCHANT_LLM_FALLBACKS: str = os.getenv("MERCHANT_LLM_FALLBACKS", "openrouter,gemini,mock")
+
+    AUXILIARY_LLM_PROVIDER: str = os.getenv("AUXILIARY_LLM_PROVIDER", "groq")
+    AUXILIARY_LLM_MODEL: str = os.getenv("AUXILIARY_LLM_MODEL", "llama-3.3-70b-versatile")
+    AUXILIARY_LLM_FALLBACKS: str = os.getenv("AUXILIARY_LLM_FALLBACKS", "gemini,openrouter,mock")
+
+    # API Keys & Models for Free Providers
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
 
     # Security Token Signing Secret (for backend signed tokens if desired)
     SECRET_KEY: str = os.getenv("SECRET_KEY", "setu-trust-layer-secret-key-12938")
@@ -45,8 +64,6 @@ class Settings:
         # Refresh instance attributes from loaded/modified environment variables
         self.DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./setu.db")
         
-        # If it's a relative SQLite database URL, resolve it to an absolute path
-        # to ensure the same database is read/written regardless of current working directory
         if self.DATABASE_URL.startswith("sqlite:///."):
             project_root = Path(__file__).resolve().parent.parent.parent
             db_name = self.DATABASE_URL.split("/.")[-1].lstrip("/")
@@ -58,13 +75,30 @@ class Settings:
         self.RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "mockwebhooksecret123")
         self.IS_PAYMENT_TEST_MODE = os.getenv("IS_PAYMENT_TEST_MODE", "True").lower() in ("true", "1", "yes")
         
-        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock")
-        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-        self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
+        self.LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite")
         self.LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-        self.LLM_MODEL = os.getenv("LLM_MODEL", "")
         self.LLM_FALLBACK_TO_MOCK = os.getenv("LLM_FALLBACK_TO_MOCK", "True").lower() in ("true", "1", "yes")
-        self.LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "10.0"))
+        self.LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
+        self.LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
+
+        self.BUYER_LLM_PROVIDER = os.getenv("BUYER_LLM_PROVIDER", "gemini")
+        self.BUYER_LLM_MODEL = os.getenv("BUYER_LLM_MODEL", "gemini-3.1-flash-lite")
+        self.BUYER_LLM_FALLBACKS = os.getenv("BUYER_LLM_FALLBACKS", "openrouter,groq,mock")
+
+        self.MERCHANT_LLM_PROVIDER = os.getenv("MERCHANT_LLM_PROVIDER", "groq")
+        self.MERCHANT_LLM_MODEL = os.getenv("MERCHANT_LLM_MODEL", "llama-3.3-70b-versatile")
+        self.MERCHANT_LLM_FALLBACKS = os.getenv("MERCHANT_LLM_FALLBACKS", "openrouter,gemini,mock")
+
+        self.AUXILIARY_LLM_PROVIDER = os.getenv("AUXILIARY_LLM_PROVIDER", "groq")
+        self.AUXILIARY_LLM_MODEL = os.getenv("AUXILIARY_LLM_MODEL", "llama-3.3-70b-versatile")
+        self.AUXILIARY_LLM_FALLBACKS = os.getenv("AUXILIARY_LLM_FALLBACKS", "gemini,openrouter,mock")
+
+        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+        self.GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+        self.GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        self.OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+        self.OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
         self.SECRET_KEY = os.getenv("SECRET_KEY", "setu-trust-layer-secret-key-12938")
 
         # Determine if valid Razorpay test credentials are present

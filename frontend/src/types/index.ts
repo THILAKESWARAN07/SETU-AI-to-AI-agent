@@ -141,9 +141,12 @@ export interface ConversationEvent {
   is_final?: boolean;
   
   // Provider Observability Metadata
-  provider_used?: 'gemini' | 'mock' | 'openai' | string;
+  provider_used?: 'gemini' | 'openrouter' | 'groq' | 'mock' | string;
+  provider_type?: 'real_llm' | 'deterministic_fallback';
   model_name?: string;
+  agent_role?: 'buyer' | 'merchant' | 'auxiliary' | string;
   fallback_used?: boolean;
+  fallback_depth?: number;
   fallback_reason?: string | null;
   response_latency_ms?: number;
 }
@@ -194,8 +197,13 @@ export interface DemoCommerceResponse {
   // Provider Execution Summary
   provider_summary?: {
     gemini_calls: number;
+    openrouter_calls?: number;
+    groq_calls?: number;
     mock_calls: number;
+    real_llm_calls?: number;
+    deterministic_fallback_calls?: number;
     fallback_count: number;
+    all_agent_turns_used_real_llm?: boolean;
     all_agent_turns_used_gemini: boolean;
   };
 }

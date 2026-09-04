@@ -81,28 +81,56 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/agent/provider-status")
 def get_provider_status():
+    import os
     from backend.app.config import settings
-    from backend.app.agents.provider import get_provider
+    from backend.app.agents.provider import get_provider_for_agent, get_provider
     
-    configured_provider = os.getenv("LLM_PROVIDER", settings.LLM_PROVIDER).lower()
-    has_gemini_key = bool(os.getenv("GEMINI_API_KEY", settings.GEMINI_API_KEY))
-    has_openai_key = bool(os.getenv("OPENAI_API_KEY", settings.OPENAI_API_KEY))
-    configured_model = os.getenv("LLM_MODEL", settings.LLM_MODEL)
-    timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", str(settings.LLM_TIMEOUT_SECONDS)))
-    fallback_to_mock = os.getenv("LLM_FALLBACK_TO_MOCK", str(settings.LLM_FALLBACK_TO_MOCK)).lower() in ("true", "1", "yes")
+    buyer_p = get_provider_for_agent("buyer")
+    merchant_p = get_provider_for_agent("merchant")
+    auxiliary_p = get_provider_for_agent("auxiliary")
+    legacy_p = get_provider()
 
-    provider_instance = get_provider()
-    
     return {
-        "configured_provider": configured_provider,
-        "has_gemini_key": has_gemini_key,
-        "has_openai_key": has_openai_key,
-        "configured_model": configured_model or ("gemini-2.5-flash" if configured_provider == "gemini" else "mock-model-v2"),
-        "timeout_seconds": timeout_seconds,
-        "fallback_to_mock": fallback_to_mock,
-        "active_provider_name": provider_instance.provider_name,
-        "active_model_name": provider_instance.model_name,
-        "active_agent_mode": provider_instance.agent_mode
+        "configured_provider": os.getenv("LLM_PROVIDER", settings.LLM_PROVIDER).lower(),
+        "configured_model": os.getenv("LLM_MODEL", settings.LLM_MODEL),
+        "timeout_seconds": float(os.getenv("LLM_TIMEOUT_SECONDS", str(settings.LLM_TIMEOUT_SECONDS))),
+        "fallback_to_mock": os.getenv("LLM_FALLBACK_TO_MOCK", str(settings.LLM_FALLBACK_TO_MOCK)).lower() in ("true", "1", "yes"),
+        "active_provider_name": legacy_p.provider_name,
+        "active_model_name": legacy_p.model_name,
+        "active_agent_mode": legacy_p.agent_mode,
+        "buyer": {
+            "configured_primary": settings.BUYER_LLM_PROVIDER,
+            "configured_model": settings.BUYER_LLM_MODEL,
+            "configured_fallbacks": [f.strip() for f in settings.BUYER_LLM_FALLBACKS.split(",") if f.strip()],
+            "active_provider": buyer_p.provider_name,
+            "active_model": buyer_p.model_name,
+            "agent_mode": buyer_p.agent_mode,
+            "chain": [p.provider_name for p in getattr(buyer_p, "providers", [buyer_p])],
+        },
+        "merchant": {
+            "configured_primary": settings.MERCHANT_LLM_PROVIDER,
+            "configured_model": settings.MERCHANT_LLM_MODEL,
+            "configured_fallbacks": [f.strip() for f in settings.MERCHANT_LLM_FALLBACKS.split(",") if f.strip()],
+            "active_provider": merchant_p.provider_name,
+            "active_model": merchant_p.model_name,
+            "agent_mode": merchant_p.agent_mode,
+            "chain": [p.provider_name for p in getattr(merchant_p, "providers", [merchant_p])],
+        },
+        "auxiliary": {
+            "configured_primary": settings.AUXILIARY_LLM_PROVIDER,
+            "configured_model": settings.AUXILIARY_LLM_MODEL,
+            "configured_fallbacks": [f.strip() for f in settings.AUXILIARY_LLM_FALLBACKS.split(",") if f.strip()],
+            "active_provider": auxiliary_p.provider_name,
+            "active_model": auxiliary_p.model_name,
+            "agent_mode": auxiliary_p.agent_mode,
+            "chain": [p.provider_name for p in getattr(auxiliary_p, "providers", [auxiliary_p])],
+        },
+        "keys_configured": {
+            "gemini": bool(settings.GEMINI_API_KEY),
+            "openrouter": bool(settings.OPENROUTER_API_KEY),
+            "groq": bool(settings.GROQ_API_KEY)
+        },
+        "fallback_to_mock_enabled": settings.LLM_FALLBACK_TO_MOCK
     }
 
 
@@ -612,6 +640,8 @@ class DemoCommerceResponse(BaseModel):
     merchant_tools_used: List[str] = []
     merchant_confidence: float = 1.0
     
+    provider_summary: Optional[Dict[str, Any]] = None
+    
     # Step 12 metadata
     provider: str = "MockProvider"
     model: str = "mock-model-v2"
@@ -623,14 +653,13 @@ class DemoCommerceResponse(BaseModel):
 
 @app.post("/api/demo/commerce", response_model=DemoCommerceResponse)
 def run_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depends(get_db)):
-    from backend.app.agents.provider import get_provider
+    from backend.app.agents.provider import get_provider_for_agent
     from backend.app.agents.buyer_agent import BuyerAgent
     from backend.app.agents.merchant_agent import MerchantAgent
     from backend.app.agents.orchestrator import NegotiationOrchestrator, NegotiationError
 
-    provider = get_provider()
-    buyer = BuyerAgent(provider)
-    merchant = MerchantAgent(provider)
+    buyer = BuyerAgent(get_provider_for_agent("buyer"))
+    merchant = MerchantAgent(get_provider_for_agent("merchant"))
 
     try:
         orchestrator = NegotiationOrchestrator(db, buyer, merchant)
@@ -653,7 +682,7 @@ def run_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depends(g
 @app.post("/api/demo/commerce/stream")
 def stream_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depends(get_db)):
     from fastapi.responses import StreamingResponse
-    from backend.app.agents.provider import get_provider
+    from backend.app.agents.provider import get_provider_for_agent
     from backend.app.agents.buyer_agent import BuyerAgent
     from backend.app.agents.merchant_agent import MerchantAgent
     from backend.app.agents.orchestrator import NegotiationOrchestrator, NegotiationError
@@ -662,9 +691,8 @@ def stream_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depend
     import threading
 
     def event_stream():
-        provider = get_provider()
-        buyer = BuyerAgent(provider)
-        merchant = MerchantAgent(provider)
+        buyer = BuyerAgent(get_provider_for_agent("buyer"))
+        merchant = MerchantAgent(get_provider_for_agent("merchant"))
         orchestrator = NegotiationOrchestrator(db, buyer, merchant)
 
         event_q: queue.Queue = queue.Queue()

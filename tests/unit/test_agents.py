@@ -364,16 +364,20 @@ def test_provider_failures_handled_safely(db: Session):
 # =====================================================================
 
 def test_s10_01_real_provider_adapter():
-    """1. Test Gemini and OpenAI adapter instantiation."""
-    from backend.app.agents.provider import GeminiProvider, OpenAIProvider
+    """1. Test Gemini, Groq, and OpenRouter adapter instantiation."""
+    from backend.app.agents.provider import GeminiProvider, GroqProvider, OpenRouterProvider
     gemini = GeminiProvider(api_key="fake_gemini_key", model_name="gemini-1.5-flash")
-    openai = OpenAIProvider(api_key="fake_openai_key", model_name="gpt-4o-mini")
+    groq = GroqProvider(api_key="fake_groq_key", model_name="llama-3.3-70b-versatile")
+    openrouter = OpenRouterProvider(api_key="fake_openrouter_key", model_name="meta-llama/llama-3.3-70b-instruct:free")
     assert gemini.api_key == "fake_gemini_key"
     assert gemini.model_name == "gemini-1.5-flash"
-    assert openai.api_key == "fake_openai_key"
-    assert openai.model_name == "gpt-4o-mini"
+    assert groq.api_key == "fake_groq_key"
+    assert groq.model_name == "llama-3.3-70b-versatile"
+    assert openrouter.api_key == "fake_openrouter_key"
+    assert openrouter.model_name == "meta-llama/llama-3.3-70b-instruct:free"
     assert gemini.agent_mode == "LIVE LLM"
-    assert openai.agent_mode == "LIVE LLM"
+    assert groq.agent_mode == "LIVE LLM"
+    assert openrouter.agent_mode == "LIVE LLM"
 
 
 def test_s10_02_provider_configuration(monkeypatch):

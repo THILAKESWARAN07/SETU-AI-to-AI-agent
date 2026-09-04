@@ -196,21 +196,30 @@ class NegotiationOrchestrator:
             if effective_meta:
                 if isinstance(effective_meta, dict):
                     evt_data["provider_used"] = effective_meta.get("provider_used", "mock")
+                    evt_data["provider_type"] = effective_meta.get("provider_type", "real_llm" if evt_data["provider_used"] != "mock" else "deterministic_fallback")
                     evt_data["model_name"] = effective_meta.get("model_name", "mock-model-v2")
+                    evt_data["agent_role"] = effective_meta.get("agent_role", evt_data.get("actor"))
                     evt_data["fallback_used"] = bool(effective_meta.get("fallback_used", False))
+                    evt_data["fallback_depth"] = int(effective_meta.get("fallback_depth", 0))
                     evt_data["fallback_reason"] = effective_meta.get("fallback_reason", None)
                     evt_data["response_latency_ms"] = effective_meta.get("response_latency_ms", 0.0)
                 else:
                     evt_data["provider_used"] = getattr(effective_meta, "provider_used", "mock")
+                    evt_data["provider_type"] = getattr(effective_meta, "provider_type", "real_llm" if evt_data["provider_used"] != "mock" else "deterministic_fallback")
                     evt_data["model_name"] = getattr(effective_meta, "model_name", "mock-model-v2")
+                    evt_data["agent_role"] = getattr(effective_meta, "agent_role", evt_data.get("actor"))
                     evt_data["fallback_used"] = bool(getattr(effective_meta, "fallback_used", False))
+                    evt_data["fallback_depth"] = int(getattr(effective_meta, "fallback_depth", 0))
                     evt_data["fallback_reason"] = getattr(effective_meta, "fallback_reason", None)
                     evt_data["response_latency_ms"] = getattr(effective_meta, "response_latency_ms", 0.0)
                 
                 evt_data["provider_execution"] = {
                     "provider_used": evt_data["provider_used"],
+                    "provider_type": evt_data["provider_type"],
                     "model_name": evt_data["model_name"],
+                    "agent_role": evt_data["agent_role"],
                     "fallback_used": evt_data["fallback_used"],
+                    "fallback_depth": evt_data["fallback_depth"],
                     "fallback_reason": evt_data["fallback_reason"],
                     "response_latency_ms": evt_data["response_latency_ms"]
                 }
@@ -224,14 +233,23 @@ class NegotiationOrchestrator:
 
         def compute_provider_summary():
             gemini_calls = sum(1 for m in provider_call_records if m and (getattr(m, "provider_used", None) == "gemini" or (isinstance(m, dict) and m.get("provider_used") == "gemini")))
+            openrouter_calls = sum(1 for m in provider_call_records if m and (getattr(m, "provider_used", None) == "openrouter" or (isinstance(m, dict) and m.get("provider_used") == "openrouter")))
+            groq_calls = sum(1 for m in provider_call_records if m and (getattr(m, "provider_used", None) == "groq" or (isinstance(m, dict) and m.get("provider_used") == "groq")))
             mock_calls = sum(1 for m in provider_call_records if m and (getattr(m, "provider_used", None) == "mock" or (isinstance(m, dict) and m.get("provider_used") == "mock")))
+            
             fallback_count = sum(1 for m in provider_call_records if m and (getattr(m, "fallback_used", False) or (isinstance(m, dict) and m.get("fallback_used"))))
-            all_gemini = (gemini_calls > 0 and mock_calls == 0 and fallback_count == 0)
+            real_llm_calls = gemini_calls + openrouter_calls + groq_calls
+            
             return {
                 "gemini_calls": gemini_calls,
+                "groq_calls": groq_calls,
+                "openrouter_calls": openrouter_calls,
                 "mock_calls": mock_calls,
+                "real_llm_calls": real_llm_calls,
+                "deterministic_fallback_calls": mock_calls,
                 "fallback_count": fallback_count,
-                "all_agent_turns_used_gemini": all_gemini
+                "all_agent_turns_used_real_llm": (real_llm_calls > 0 and mock_calls == 0),
+                "all_agent_turns_used_gemini": (gemini_calls > 0 and mock_calls == 0 and openrouter_calls == 0 and groq_calls == 0)
             }
 
         current_status = "IN_PROGRESS"

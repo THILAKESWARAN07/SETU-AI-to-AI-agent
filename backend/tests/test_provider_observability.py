@@ -139,7 +139,7 @@ def test_orchestrator_negotiation_events_have_provider_metadata(db_session):
     assert len(agent_events) >= 2
     for evt in agent_events:
         assert "provider_used" in evt
-        assert evt["provider_used"] in ("gemini", "mock", "openai")
+        assert evt["provider_used"] in ("gemini", "mock", "groq", "openrouter")
         assert "fallback_used" in evt
         assert "response_latency_ms" in evt
     

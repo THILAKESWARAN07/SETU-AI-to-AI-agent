@@ -266,9 +266,11 @@ Configure your `.env` variables as follows:
 
 ```env
 # AI Model Provider Configurations
-LLM_PROVIDER=gemini                     # Options: 'gemini', 'openai', 'mock'
-GEMINI_API_KEY=your_gemini_api_key      # Required for live mode
-LLM_MODEL=gemini-3.6-flash              # Configured model name
+LLM_PROVIDER=gemini                     # Options: 'gemini', 'openrouter', 'groq', 'mock'
+GEMINI_API_KEY=your_gemini_api_key      # Free from Google AI Studio
+GROQ_API_KEY=your_groq_api_key          # Free from Groq Console
+OPENROUTER_API_KEY=your_openrouter_key  # Free from OpenRouter
+LLM_MODEL=gemini-3.1-flash-lite         # Configured model name
 LLM_FALLBACK_TO_MOCK=True               # Fallback if API rate limits hit
 
 # Payment Gateway Configurations
