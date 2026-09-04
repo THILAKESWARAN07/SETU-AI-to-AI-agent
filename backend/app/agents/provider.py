@@ -678,17 +678,41 @@ class MockProvider(LLMProvider):
             else:
                 # Audio / Earbuds
                 if "proposed basket counter-offer" in prompt_lower or "merchant counter-offer" in prompt_lower:
-                    action = "ACCEPT"
-                    product_id = 3  # Bundle
-                    unit_price = Decimal("1899.00")
-                    total_amount = Decimal("1899.00")
-                    rationale = "Merchant counter-offer of 1899 INR for the bundle is within budget limit."
-                    message = "₹1,899 for the Wireless Earbuds and Charging Case bundle works for me. Deal!"
-                    constraints = ["budget_evaluation", "accessory_need_satisfied"]
-                    basket_items = [
-                        BasketItemSchema(product_id=1, name="Wireless Earbuds Pro", quantity=1, original_price=Decimal("1599.00"), negotiated_price=Decimal("1500.00"), is_primary=True),
-                        BasketItemSchema(product_id=2, name="Premium Charging Case", quantity=1, original_price=Decimal("399.00"), negotiated_price=Decimal("399.00"), is_primary=False)
-                    ]
+                    is_low_budget = ("around 1500" in prompt_lower or "limit is 1500" in prompt_lower or "budget: 1500" in prompt_lower or "limit is ₹1,500" in prompt_lower or "around ₹1,500" in prompt_lower or "1500 inr" in prompt_lower or "1400" in prompt_lower or "1350" in prompt_lower or "1300" in prompt_lower) and not ("2000" in prompt_lower and not any(k in prompt_lower for k in ["around 1500", "under 1400", "1500 inr", "around ₹1,500"]))
+                    is_standalone_req = "without accessories" in prompt_lower or "standalone without" in prompt_lower or "earbuds alone" in prompt_lower or "only want" in prompt_lower
+                    
+                    if "1450" in prompt_lower or "1440" in prompt_lower:
+                        action = "ACCEPT"
+                        product_id = 1
+                        unit_price = Decimal("1450.00") if "1450" in prompt_lower else Decimal("1440.00")
+                        total_amount = unit_price
+                        rationale = f"Merchant offer of ₹{unit_price} for standalone earbuds is within budget limit."
+                        message = f"₹{unit_price} for the Wireless Earbuds Pro works for me. Deal!"
+                        basket_items = [
+                            BasketItemSchema(product_id=1, name="Wireless Earbuds Pro", quantity=1, original_price=Decimal("1599.00"), negotiated_price=unit_price, is_primary=True)
+                        ]
+                    elif is_low_budget or is_standalone_req:
+                        action = "COUNTER"
+                        product_id = 1
+                        unit_price = Decimal("1450.00")
+                        total_amount = Decimal("1450.00")
+                        rationale = "Merchant bundle exceeds budget limit. Countering with standalone earbuds at ₹1,450."
+                        message = "The bundle is interesting, but ₹1,899 is over my budget limit. Can you do ₹1,450 for the earbuds alone?"
+                        basket_items = [
+                            BasketItemSchema(product_id=1, name="Wireless Earbuds Pro", quantity=1, original_price=Decimal("1599.00"), negotiated_price=Decimal("1450.00"), is_primary=True)
+                        ]
+                    else:
+                        action = "ACCEPT"
+                        product_id = 3  # Bundle
+                        unit_price = Decimal("1899.00")
+                        total_amount = Decimal("1899.00")
+                        rationale = "Merchant counter-offer of 1899 INR for the bundle is within budget limit."
+                        message = "₹1,899 for the Wireless Earbuds and Charging Case bundle works for me. Deal!"
+                        constraints = ["budget_evaluation", "accessory_need_satisfied"]
+                        basket_items = [
+                            BasketItemSchema(product_id=1, name="Wireless Earbuds Pro", quantity=1, original_price=Decimal("1599.00"), negotiated_price=Decimal("1500.00"), is_primary=True),
+                            BasketItemSchema(product_id=2, name="Premium Charging Case", quantity=1, original_price=Decimal("399.00"), negotiated_price=Decimal("399.00"), is_primary=False)
+                        ]
                 elif "1500" in prompt_lower:
                     action = "OFFER"
                     product_id = 1
@@ -730,8 +754,8 @@ class MockProvider(LLMProvider):
                 else:
                     action = "OFFER"
                     product_id = 1
-                    unit_price = Decimal("1450.00")
-                    total_amount = Decimal("1450.00")
+                    unit_price = Decimal("1500.00")
+                    total_amount = Decimal("1500.00")
                     rationale = "Proposing initial buyer offer for earbuds within budget guidelines."
                     message = "Hi, I'm looking for Wireless Earbuds under my ₹2,000 budget cap. Can you offer a competitive price?"
                     basket_items = [
@@ -762,7 +786,7 @@ class MockProvider(LLMProvider):
 
             if target_context == "mobile_phone":
                 product_id = 41
-                is_standalone_req = "standalone" in prompt_lower or "without accessories" in prompt_lower or "only want" in prompt_lower
+                is_standalone_req = ("without accessories" in prompt_lower or "standalone without" in prompt_lower or "phone alone" in prompt_lower or "only want" in prompt_lower or "without bundle" in prompt_lower or ("standalone" in prompt_lower and not "recommended standalone price" in prompt_lower and not "for the standalone" in prompt_lower and not "standalone phone" in prompt_lower))
                 is_counter_from_buyer = "buyer decision action: counter" in prompt_lower or any(w in prompt_lower for w in ["outside my", "above my", "phone alone", "phone standalone", "take the phone", "exceeds strict budget"])
                 
                 if is_counter_from_buyer:
@@ -856,6 +880,15 @@ class MockProvider(LLMProvider):
                     message = "I'm sorry, that price falls below our mandatory minimum selling price floor. I must decline."
                     margin_check = "Margin check: FAILED"
                     basket_items = [BasketItemSchema(product_id=1, name="Wireless Earbuds Pro", quantity=1, original_price=Decimal("1599.00"), negotiated_price=Decimal("1599.00"), is_primary=True)]
+                elif ("buyer decision action: counter" in prompt_lower or "buyer decision: counter" in prompt_lower) and ("1450" in prompt_lower or "earbuds alone" in prompt_lower or "1400" in prompt_lower):
+                    action = "ACCEPT"
+                    product_id = 1
+                    unit_price = Decimal("1450.00")
+                    total_amount = Decimal("1450.00")
+                    rationale = "Accepting buyer counter of 1450 for Wireless Earbuds Pro (exceeds min_selling_price 1349)."
+                    message = "Deal! I can accept ₹1,450 for the standalone Wireless Earbuds Pro as my final price."
+                    margin_check = "Margin check: PASSED"
+                    basket_items = [BasketItemSchema(product_id=1, name="Wireless Earbuds Pro", quantity=1, original_price=Decimal("1599.00"), negotiated_price=Decimal("1450.00"), is_primary=True)]
                 elif "1350" in prompt_lower or "1300" in prompt_lower or "1400" in prompt_lower:
                     action = "COUNTER"
                     product_id = 1

@@ -56,12 +56,43 @@ interface ChatMessage {
   amount?: string;
   round?: number;
   reasonLabel?: string;
+  strategy?: string;
+  eventType?: string;
   timestamp: string;
   basketItems?: any[];
   isFinal?: boolean;
 }
 
 const compileChatMessages = (res: DemoCommerceResponse): ChatMessage[] => {
+  if (res.conversation_events && res.conversation_events.length > 0) {
+    return res.conversation_events.map((evt, idx) => {
+      let sender: 'BUYER_AGENT' | 'MERCHANT_AGENT' | 'SETU_SYSTEM' = 'SETU_SYSTEM';
+      let actor = 'SETU TRUST LAYER';
+      if (evt.actor === 'buyer') {
+        sender = 'BUYER_AGENT';
+        actor = 'BUYER AGENT';
+      } else if (evt.actor === 'merchant') {
+        sender = 'MERCHANT_AGENT';
+        actor = 'MERCHANT AGENT';
+      }
+
+      return {
+        id: evt.id || `evt_${idx}`,
+        sender,
+        actor,
+        message: evt.message,
+        amount: evt.offer !== undefined && evt.offer !== null ? String(evt.offer) : undefined,
+        round: evt.round,
+        reasonLabel: evt.reason_label,
+        strategy: evt.strategy,
+        eventType: evt.event_type,
+        timestamp: evt.timestamp || formatISTTime(idx * 0.6),
+        basketItems: evt.basket_items,
+        isFinal: evt.is_final
+      };
+    });
+  }
+
   const msgs: ChatMessage[] = [];
   
   if (res.negotiation_history && res.negotiation_history.length > 0) {
@@ -113,7 +144,6 @@ const compileChatMessages = (res: DemoCommerceResponse): ChatMessage[] => {
       }
     });
   } else {
-    // Fallback if negotiation_history is empty
     msgs.push({
       id: 'buyer_init',
       sender: 'BUYER_AGENT',
@@ -509,7 +539,41 @@ export default function Negotiation() {
                         )}
                       </div>
 
+                      {msg.strategy && (
+                        <div className="merchant-strategy-badge animate-fade-in">
+                          <Layers style={{ width: '12px', height: '12px' }} />
+                          <span>{msg.strategy}</span>
+                        </div>
+                      )}
+
                       <p className="chat-bubble-message">{msg.message}</p>
+
+                      {msg.eventType === 'bundle_offer' && msg.basketItems && msg.basketItems.length > 1 && (
+                        <div className="bundle-proposal-card animate-fade-in">
+                          <div className="bundle-card-header">
+                            <span className="bundle-card-title">📦 Merchant Strategic Bundle Proposal</span>
+                          </div>
+                          <div className="bundle-items-list">
+                            {msg.basketItems.map((bItem: any, bIdx: number) => {
+                              const itemOrig = parseFloat(bItem.original_price || bItem.price || '0');
+                              const itemNeg = parseFloat(bItem.negotiated_price || bItem.price || '0');
+                              return (
+                                <div key={bIdx} className="bundle-item-row">
+                                  <span className="bundle-item-name">
+                                    {bItem.name} {bItem.is_primary ? '(Primary)' : '(Accessory)'}
+                                  </span>
+                                  <div className="bundle-item-pricing">
+                                    {itemOrig > itemNeg && (
+                                      <span className="bundle-item-orig">₹{itemOrig.toLocaleString('en-IN')}</span>
+                                    )}
+                                    <span className="bundle-item-neg">₹{itemNeg.toLocaleString('en-IN')}</span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
 
                       <div className="chat-bubble-footer">
                         {msg.amount && (

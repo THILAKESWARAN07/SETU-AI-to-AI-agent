@@ -117,6 +117,20 @@ export interface NegotiationHistoryItem {
   reason: string;
 }
 
+export interface ConversationEvent {
+  id: string;
+  round: number;
+  actor: 'buyer' | 'merchant' | 'setu';
+  event_type: 'message' | 'counter_offer' | 'bundle_offer' | 'acceptance' | 'trust_check' | 'rejection';
+  message: string;
+  offer?: string | number;
+  basket_items?: any[];
+  strategy?: string;
+  reason_label?: string;
+  timestamp?: string;
+  is_final?: boolean;
+}
+
 export interface DemoCommerceResponse {
   buyer_id: string;
   intent: string;
@@ -125,6 +139,7 @@ export interface DemoCommerceResponse {
   cross_sell_product_id: number;
   bundle_offer: Record<string, any>;
   negotiation_history: NegotiationHistoryItem[];
+  conversation_events?: ConversationEvent[];
   purchase_request_id: number;
   decision: string;
   reasons: string[];

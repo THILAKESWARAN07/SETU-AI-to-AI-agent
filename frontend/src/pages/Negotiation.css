@@ -1035,3 +1035,81 @@
     display: none;
   }
 }
+
+/* --- MERCHANT STRATEGY & BUNDLE PROPOSAL STYLING --- */
+.merchant-strategy-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: #fbbf24;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  width: fit-content;
+  margin-bottom: 4px;
+}
+
+.bundle-proposal-card {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 6px;
+  margin-bottom: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+.bundle-card-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+
+.bundle-card-title {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #818cf8;
+  letter-spacing: 0.02em;
+}
+
+.bundle-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bundle-item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--text-main);
+}
+
+.bundle-item-name {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.bundle-item-pricing {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+}
+
+.bundle-item-orig {
+  color: var(--text-dimmed);
+  text-decoration: line-through;
+  font-size: 0.72rem;
+}
+
+.bundle-item-neg {
+  color: #34d399;
+  font-weight: 700;
+}

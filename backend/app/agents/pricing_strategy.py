@@ -25,6 +25,13 @@ class MerchantPricingStrategy:
         """
         Calculates mathematically enforced price bounds and recommended concession price for the current round.
         """
+        cost = Decimal(str(cost))
+        base_price = Decimal(str(base_price))
+        min_margin_percent = Decimal(str(min_margin_percent))
+        max_discount_percent = Decimal(str(max_discount_percent))
+        if min_selling_price is not None:
+            min_selling_price = Decimal(str(min_selling_price))
+
         # Absolute hard price floor derived from cost and min margin policy
         margin_price_floor = (cost / (Decimal("1.00") - (min_margin_percent / Decimal("100.00")))).quantize(Decimal("0.01"))
         
@@ -81,6 +88,10 @@ class MerchantPricingStrategy:
         """
         if not related_prods:
             return None
+
+        min_margin_percent = Decimal(str(min_margin_percent))
+        if buyer_max_budget is not None:
+            buyer_max_budget = Decimal(str(buyer_max_budget))
 
         # Calculate combined list price and cost
         primary_price = Decimal(str(primary_prod.get("price", "0.00")))
@@ -147,4 +158,122 @@ class MerchantPricingStrategy:
             "discount_amount": bundle_discount,
             "total_cost": total_cost,
             "margin_percent": margin_percent
+        }
+
+    @staticmethod
+    def evaluate_sales_strategy(
+        primary_prod: Dict[str, Any],
+        related_prods: List[Dict[str, Any]],
+        buyer_offer_price: Decimal,
+        buyer_max_budget: Optional[Decimal],
+        standalone_preferred: bool = False,
+        round_idx: int = 1,
+        max_rounds: int = 4,
+        min_margin_percent: Decimal = Decimal("15.00"),
+        max_discount_percent: Decimal = Decimal("15.00")
+    ) -> Dict[str, Any]:
+        """
+        Evaluates merchant pricing strategy:
+        - List price, cost price, effective floor, min margin, inventory.
+        - Strategic actions: HOLD_PRICE, COUNTER_PRICE, ACCEPT, BUNDLE, VALUE_UPSELL, ALTERNATIVE.
+        - Calculates standalone_profit, bundle_profit, bundle_value_to_buyer.
+        - Deterministic acceptance: accept ONLY if buyer offer >= merchant target threshold or round final concession.
+        """
+        base_price = Decimal(str(primary_prod.get("price", "0.00")))
+        cost = Decimal(str(primary_prod.get("cost", "0.00")))
+        min_sp = Decimal(str(primary_prod.get("min_selling_price") or primary_prod.get("cost", "0.00")))
+        inventory = int(primary_prod.get("inventory", 10))
+        buyer_offer_price = Decimal(str(buyer_offer_price))
+        min_margin_percent = Decimal(str(min_margin_percent))
+        max_discount_percent = Decimal(str(max_discount_percent))
+        if buyer_max_budget is not None:
+            buyer_max_budget = Decimal(str(buyer_max_budget))
+
+        bounds = MerchantPricingStrategy.calculate_pricing_bounds(
+            cost=cost,
+            base_price=base_price,
+            min_selling_price=min_sp,
+            inventory=inventory,
+            round_idx=round_idx,
+            max_rounds=max_rounds,
+            min_margin_percent=min_margin_percent,
+            max_discount_percent=max_discount_percent
+        )
+
+        absolute_floor = bounds["absolute_floor"]
+        target_offer_price = bounds["target_offer_price"]
+        merchant_best_price = bounds["merchant_best_price"]
+
+        # Calculate potential bundle
+        bundle_info = None
+        if related_prods and not standalone_preferred:
+            bundle_prescription = MerchantPricingStrategy.generate_bundle_prescription(
+                primary_prod=primary_prod,
+                related_prods=related_prods,
+                buyer_max_budget=buyer_max_budget,
+                min_margin_percent=min_margin_percent
+            )
+            if bundle_prescription:
+                bundle_total = bundle_prescription["bundle_total"]
+                bundle_cost = bundle_prescription["total_cost"]
+                bundle_list = bundle_prescription["original_total"]
+                
+                bundle_profit = bundle_total - bundle_cost
+                standalone_profit = buyer_offer_price - cost
+                bundle_value_to_buyer = bundle_list - bundle_total
+                
+                within_budget = (buyer_max_budget is None) or (bundle_total <= buyer_max_budget)
+                
+                if within_budget and bundle_profit > standalone_profit and bundle_value_to_buyer > Decimal("0"):
+                    bundle_info = {
+                        "prescription": bundle_prescription,
+                        "bundle_profit": bundle_profit,
+                        "standalone_profit": standalone_profit,
+                        "bundle_value_to_buyer": bundle_value_to_buyer
+                    }
+
+        # Strategy decision:
+        # 1. If buyer offer is below absolute floor:
+        if buyer_offer_price < absolute_floor:
+            if buyer_offer_price < (absolute_floor * Decimal("0.70")):
+                strategy = "HOLD_PRICE"
+                recommended_standalone_price = base_price
+                reason = f"Buyer offer of ₹{buyer_offer_price} is severely below price floor of ₹{absolute_floor}. Holding price at ₹{base_price}."
+            else:
+                strategy = "COUNTER_PRICE"
+                recommended_standalone_price = max(target_offer_price, absolute_floor)
+                reason = f"Buyer offer of ₹{buyer_offer_price} is below floor of ₹{absolute_floor}. Countering at ₹{recommended_standalone_price}."
+        
+        # 2. If buyer offer meets or exceeds target price:
+        elif buyer_offer_price >= target_offer_price:
+            strategy = "ACCEPT"
+            recommended_standalone_price = buyer_offer_price
+            reason = f"Buyer offer of ₹{buyer_offer_price} meets merchant target price of ₹{target_offer_price}."
+
+        # 3. If round is final concession and buyer offer >= merchant_best_price:
+        elif round_idx >= 3 and buyer_offer_price >= merchant_best_price:
+            strategy = "ACCEPT"
+            recommended_standalone_price = buyer_offer_price
+            reason = f"In round {round_idx}, buyer offer of ₹{buyer_offer_price} meets merchant best concession price of ₹{merchant_best_price}."
+
+        # 4. If bundle is strategically beneficial and buyer didn't disallow it:
+        elif bundle_info is not None:
+            strategy = "BUNDLE"
+            recommended_standalone_price = target_offer_price
+            reason = f"Countering standalone at ₹{target_offer_price} and proposing strategic accessory bundle for higher total value and profit."
+
+        # 5. Otherwise, counter price
+        else:
+            strategy = "COUNTER_PRICE"
+            # Concession price halfway between buyer offer and target price, bounded by floor
+            step_price = ((target_offer_price + buyer_offer_price) / Decimal("2.00")).quantize(Decimal("0.01"))
+            recommended_standalone_price = max(step_price, merchant_best_price, absolute_floor)
+            reason = f"Countering with concession price of ₹{recommended_standalone_price} (bounds: ₹{absolute_floor} - ₹{base_price})."
+
+        return {
+            "strategy": strategy,
+            "bounds": bounds,
+            "recommended_standalone_price": recommended_standalone_price,
+            "bundle_info": bundle_info,
+            "reason": reason
         }

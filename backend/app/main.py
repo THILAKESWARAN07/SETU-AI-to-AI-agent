@@ -565,6 +565,7 @@ class DemoCommerceResponse(BaseModel):
     cross_sell_product_id: int
     bundle_offer: Dict[str, Any]
     negotiation_history: List[Dict[str, Any]]
+    conversation_events: List[Dict[str, Any]] = []
     purchase_request_id: int
     decision: str
     reasons: List[str]
@@ -573,6 +574,7 @@ class DemoCommerceResponse(BaseModel):
     discount_percent: str
     margin_percent: str
     policy_version: str
+    basket: Optional[Dict[str, Any]] = None
     
     # Trace variables
     agent_mode: str = "OFFLINE MOCK"
@@ -620,6 +622,41 @@ def run_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depends(g
     except Exception as e:
         logger.error(f"General error in commerce flow: {e}")
         raise HTTPException(status_code=500, detail="Negotiation flow encountered a system error.")
+
+@app.post("/api/demo/commerce/stream")
+def stream_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depends(get_db)):
+    from fastapi.responses import StreamingResponse
+    from backend.app.agents.provider import get_provider
+    from backend.app.agents.buyer_agent import BuyerAgent
+    from backend.app.agents.merchant_agent import MerchantAgent
+    from backend.app.agents.orchestrator import NegotiationOrchestrator, NegotiationError
+    import json
+    import time
+
+    def event_stream():
+        provider = get_provider()
+        buyer = BuyerAgent(provider)
+        merchant = MerchantAgent(provider)
+        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
+
+        try:
+            res = orchestrator.run_negotiation_loop(
+                buyer_id=request.buyer_id,
+                intent=request.intent,
+                budget=request.budget,
+                max_rounds=4
+            )
+            for evt in res.get("conversation_events", []):
+                yield f"data: {json.dumps(evt)}\n\n"
+                time.sleep(0.1)
+            yield f"data: {json.dumps({'event_type': 'COMPLETE', 'result': res})}\n\n"
+        except NegotiationError as e:
+            err_data = getattr(e, "result_data", {"decision": "REJECTED", "reasons": [str(e)]})
+            yield f"data: {json.dumps({'event_type': 'ERROR', 'error': str(e), 'result': err_data})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'event_type': 'ERROR', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # --- ATTACK TEST ENDPOINT ---

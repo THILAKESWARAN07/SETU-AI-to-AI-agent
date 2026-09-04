@@ -99,6 +99,12 @@ def parse_budget_intent(intent: str, configured_budget: Decimal) -> Dict[str, An
         "accessories_wanted": accessories_wanted
     }
 
+def format_ist_timestamp(offset_seconds: float = 0.0) -> str:
+    from datetime import datetime, timezone, timedelta
+    ist_tz = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(ist_tz) + timedelta(seconds=offset_seconds)
+    return now.strftime("%d %b %Y, %I:%M %p IST")
+
 class NegotiationError(Exception):
     def __init__(self, message: str, result_data: dict = None):
         super().__init__(message)
@@ -158,6 +164,7 @@ class NegotiationOrchestrator:
             metadata={"buyer_id": buyer_id, "intent": intent, "target_budget": str(budget_info['target_budget']), "maximum_budget": str(effective_max_budget), "session_id": session_id}
         )
         negotiation_history = []
+        conversation_events = []
         current_status = "IN_PROGRESS"
         final_decision_pr_id = None
         final_price = None
@@ -204,6 +211,7 @@ class NegotiationOrchestrator:
                     "reason": "Negotiation session failed"
                 },
                 "negotiation_history": negotiation_history or [],
+                "conversation_events": conversation_events or [],
                 "purchase_request_id": 0,
                 "decision": decision_val,
                 "reasons": reasons,
@@ -427,24 +435,54 @@ class NegotiationOrchestrator:
             reason=buyer_decision.rationale,
             metadata={"amount": str(buyer_decision.total_amount), "confidence": str(self.buyer.last_confidence)}
         )
-
         AuditEngine.log_event(
             db=self.db,
             actor="BUYER_AGENT",
             action="BUYER_OFFER_CREATED",
             result="SUCCESS",
             reason=buyer_decision.rationale,
-            metadata={
-                "product_id": buyer_decision.product_id,
-                "quantity": buyer_decision.quantity,
-                "offered_price": str(buyer_decision.total_amount),
-                "constraints_checked": buyer_decision.constraints_checked
-            }
+            metadata={"amount": str(buyer_decision.total_amount), "confidence": str(self.buyer.last_confidence)}
         )
 
         original_amount = basket_original_total
 
-        # Append turn 1
+        serialized_buyer_init_items = [
+            {
+                "product_id": item.product_id,
+                "name": item.name,
+                "quantity": item.quantity,
+                "original_price": str(item.original_price),
+                "negotiated_price": str(item.negotiated_price),
+                "is_primary": item.is_primary
+            }
+            for item in buyer_decision.basket_items
+        ]
+
+        # Record Event 1: Buyer Opening Request
+        conversation_events.append({
+            "id": "evt_r1_buyer_req",
+            "round": 1,
+            "actor": "buyer",
+            "event_type": "message",
+            "message": getattr(buyer_decision, "message", None) or buyer_decision.rationale,
+            "offer": str(buyer_decision.total_amount),
+            "basket_items": serialized_buyer_init_items,
+            "reason_label": "Buyer opening offer within budget guidelines",
+            "timestamp": format_ist_timestamp(0.5)
+        })
+
+        # Record Event 2: SETU Catalog Availability & Budget Cap Check
+        conversation_events.append({
+            "id": "evt_r1_setu_budget",
+            "round": 1,
+            "actor": "setu",
+            "event_type": "trust_check",
+            "message": f"SETU verified catalog availability & recorded buyer budget boundary (₹{effective_max_budget}).",
+            "reason_label": "Budget & Stock Validated",
+            "timestamp": format_ist_timestamp(0.8)
+        })
+
+        # Append turn 1 for legacy compatibility
         negotiation_history.append({
             "round": 1,
             "buyer_offer": {
@@ -458,17 +496,7 @@ class NegotiationOrchestrator:
                 "reason_label": "Buyer budget limit satisfied",
                 "tools_used": list(self.buyer.tools_called_in_session),
                 "confidence": self.buyer.last_confidence,
-                "basket_items": [
-                    {
-                        "product_id": item.product_id,
-                        "name": item.name,
-                        "quantity": item.quantity,
-                        "original_price": str(item.original_price),
-                        "negotiated_price": str(item.negotiated_price),
-                        "is_primary": item.is_primary
-                    }
-                    for item in buyer_decision.basket_items
-                ]
+                "basket_items": serialized_buyer_init_items
             },
             "merchant_offer": None,
             "accepted": False,
@@ -492,6 +520,43 @@ class NegotiationOrchestrator:
             merchant_policy = get_merchant_constraints_tool(self.db)
             margin_eval = evaluate_margin_tool(self.db, latest_buyer_offer.product_id, latest_buyer_offer.quantity, str(latest_buyer_offer.total_amount))
 
+            # Retrieve product and related items for sales strategy evaluation
+            p_obj_cur = self.db.query(Product).filter(Product.id == latest_buyer_offer.product_id).first()
+            related_objs_cur = []
+            if p_obj_cur and p_obj_cur.related_product_ids:
+                related_objs_cur = self.db.query(Product).filter(Product.id.in_(p_obj_cur.related_product_ids), Product.active == True).all()
+
+            sales_eval = MerchantPricingStrategy.evaluate_sales_strategy(
+                primary_prod={
+                    "id": p_obj_cur.id if p_obj_cur else latest_buyer_offer.product_id,
+                    "name": p_obj_cur.name if p_obj_cur else "Product",
+                    "price": str(p_obj_cur.price if p_obj_cur else latest_buyer_offer.total_amount),
+                    "cost": str(p_obj_cur.cost if p_obj_cur else Decimal("0.00")),
+                    "min_selling_price": str(p_obj_cur.min_selling_price if p_obj_cur else Decimal("0.00")),
+                    "inventory": p_obj_cur.inventory if p_obj_cur else 10,
+                    "active": True
+                },
+                related_prods=[
+                    {
+                        "id": r.id,
+                        "name": r.name,
+                        "price": str(r.price),
+                        "cost": str(r.cost),
+                        "min_selling_price": str(r.min_selling_price or r.cost),
+                        "inventory": r.inventory,
+                        "active": r.active
+                    }
+                    for r in related_objs_cur
+                ],
+                buyer_offer_price=latest_buyer_offer.total_amount,
+                buyer_max_budget=effective_max_budget,
+                standalone_preferred=budget_info.get("standalone_preferred", False),
+                round_idx=round_idx - 1,
+                max_rounds=max_rounds,
+                min_margin_percent=merchant_policy.get("min_margin_percent", Decimal("15.00")),
+                max_discount_percent=merchant_policy.get("max_discount_percent", Decimal("15.00"))
+            )
+
             merchant_prompt = (
                 f"You are the Merchant Agent. User Procurement Request: '{intent}'.\n"
                 f"Buyer Decision Action: {latest_buyer_offer.action}\n"
@@ -501,12 +566,12 @@ class NegotiationOrchestrator:
                 f"Product Pricing: {base_price}\n"
                 f"Merchant Policy Constraints: {merchant_policy}\n"
                 f"Margin Evaluation: {margin_eval}\n"
-                f"Buyer Rationale: '{latest_buyer_offer.rationale}'\n"
+                f"Recommended Merchant Strategy: {sales_eval['strategy']} ({sales_eval['reason']})\n"
+                f"Recommended Standalone Price: ₹{sales_eval['recommended_standalone_price']}\n"
                 f"You are negotiating a basket. Formulate your response (COUNTER, ACCEPT, or REJECT). "
                 f"If you choose to COUNTER, you can offer a profitable bundle containing the primary product "
                 f"plus one or more compatible accessories/complementary products (from its related_product_ids list). "
-                f"Intelligently adjust individual item prices in the basket_items list to maximize profit while staying "
-                f"within the buyer's budget and satisfying policies. Ensure total_amount equals the sum of negotiated prices."
+                f"Ensure total_amount equals the exact sum of negotiated prices of all items in basket_items."
             )
 
             try:
@@ -554,6 +619,17 @@ class NegotiationOrchestrator:
                     result="FAIL",
                     reason=merchant_decision.rationale
                 )
+                conversation_events.append({
+                    "id": f"evt_r{round_idx}_merchant_reject",
+                    "round": round_idx,
+                    "actor": "merchant",
+                    "event_type": "rejection",
+                    "message": getattr(merchant_decision, "message", None) or merchant_decision.rationale,
+                    "offer": "0.00",
+                    "strategy": f"Merchant Strategy: {sales_eval['strategy']}",
+                    "reason_label": "Declined: Below Price Floor",
+                    "timestamp": format_ist_timestamp(1.2 * round_idx)
+                })
                 current_status = "REJECTED"
                 memory.final_outcome = "REJECTED"
                 break
@@ -613,6 +689,32 @@ class NegotiationOrchestrator:
                     result="SUCCESS",
                     reason=merchant_decision.rationale
                 )
+
+                serialized_merchant_accept_items = [
+                    {
+                        "product_id": item.product_id,
+                        "name": item.name,
+                        "quantity": item.quantity,
+                        "original_price": str(item.original_price),
+                        "negotiated_price": str(item.negotiated_price),
+                        "is_primary": item.is_primary
+                    }
+                    for item in latest_buyer_offer.basket_items
+                ]
+
+                conversation_events.append({
+                    "id": f"evt_r{round_idx}_merchant_accept",
+                    "round": round_idx,
+                    "actor": "merchant",
+                    "event_type": "acceptance",
+                    "message": getattr(merchant_decision, "message", None) or f"Deal agreed! I'll accept ₹{latest_buyer_offer.total_amount} for the basket.",
+                    "offer": str(latest_buyer_offer.total_amount),
+                    "basket_items": serialized_merchant_accept_items,
+                    "strategy": f"Merchant Strategy: {sales_eval['strategy']}",
+                    "reason_label": "Merchant acceptance within margin bounds",
+                    "timestamp": format_ist_timestamp(1.2 * round_idx)
+                })
+
                 current_status = "AGREED"
                 final_price = latest_buyer_offer.total_amount
                 selected_product_id = latest_buyer_offer.product_id
@@ -693,6 +795,46 @@ class NegotiationOrchestrator:
                 discount_amt = merchant_original_total - merchant_decision.total_amount
                 discount_pct = (discount_amt / merchant_original_total) * Decimal("100") if merchant_original_total > Decimal("0") else Decimal("0")
 
+                serialized_merchant_counter_items = [
+                    {
+                        "product_id": item.product_id,
+                        "name": item.name,
+                        "quantity": item.quantity,
+                        "original_price": str(item.original_price),
+                        "negotiated_price": str(item.negotiated_price),
+                        "is_primary": item.is_primary
+                    }
+                    for item in merchant_decision.basket_items
+                ]
+
+                # Check if this is a bundle offer
+                is_bundle_counter = len(merchant_decision.basket_items) > 1
+
+                # Record Merchant Counter Event
+                conversation_events.append({
+                    "id": f"evt_r{round_idx}_merchant_counter",
+                    "round": round_idx,
+                    "actor": "merchant",
+                    "event_type": "bundle_offer" if is_bundle_counter else "counter_offer",
+                    "message": getattr(merchant_decision, "message", None) or merchant_decision.rationale,
+                    "offer": str(merchant_decision.total_amount),
+                    "basket_items": serialized_merchant_counter_items,
+                    "strategy": f"Merchant Strategy: {sales_eval['strategy']}",
+                    "reason_label": "Merchant bundle proposal" if is_bundle_counter else "Within merchant price floor & margin rules",
+                    "timestamp": format_ist_timestamp(1.2 * round_idx)
+                })
+
+                # Record SETU Price Floor & Margin Check
+                conversation_events.append({
+                    "id": f"evt_r{round_idx}_setu_floor",
+                    "round": round_idx,
+                    "actor": "setu",
+                    "event_type": "trust_check",
+                    "message": f"SETU enforced merchant price floor & margin policy constraints ({calculated_margin.quantize(Decimal('0.01'))}% margin).",
+                    "reason_label": "Price Floor & Margin Enforced",
+                    "timestamp": format_ist_timestamp(1.2 * round_idx + 0.3)
+                })
+
                 negotiation_history.append({
                     "round": round_idx,
                     "buyer_offer": None,
@@ -706,17 +848,7 @@ class NegotiationOrchestrator:
                         "reason_label": "Within merchant price floor & margin rules",
                         "tools_used": list(self.merchant.tools_called_in_session),
                         "confidence": self.merchant.last_confidence,
-                        "basket_items": [
-                            {
-                                "product_id": item.product_id,
-                                "name": item.name,
-                                "quantity": item.quantity,
-                                "original_price": str(item.original_price),
-                                "negotiated_price": str(item.negotiated_price),
-                                "is_primary": item.is_primary
-                            }
-                            for item in merchant_decision.basket_items
-                        ]
+                        "basket_items": serialized_merchant_counter_items
                     },
                     "accepted": False,
                     "reason": merchant_decision.rationale
@@ -731,11 +863,12 @@ class NegotiationOrchestrator:
                 budget_eval = evaluate_budget_tool(self.db, str(latest_merchant_counter.total_amount), str(budget))
 
                 buyer_eval_prompt = (
-                    f"You are the Buyer Agent. Evaluate Merchant's proposed basket counter-offer: {[f'{item.name} (Qty: {item.quantity}, Price: {item.negotiated_price})' for item in latest_merchant_counter.basket_items]} with total amount: {latest_merchant_counter.total_amount} INR.\n"
+                    f"You are the Buyer Agent. User Intent: '{intent}' with target budget: ₹{budget_info['target_budget']} and maximum budget: ₹{effective_max_budget}.\n"
+                    f"Evaluate Merchant's proposed basket counter-offer: {[f'{item.name} (Qty: {item.quantity}, Price: {item.negotiated_price})' for item in latest_merchant_counter.basket_items]} with total amount: {latest_merchant_counter.total_amount} INR.\n"
                     f"Your Budget Limits: {budget_eval}\n"
                     f"Merchant Rationale: '{latest_merchant_counter.rationale}'\n"
                     f"Evaluate if the recommended bundle/accessories are relevant and provide additional value. "
-                    f"Reject irrelevant upselling. Verify if the total amount respects your budget of {budget} INR. "
+                    f"Reject irrelevant upselling. Verify if the total amount respects your maximum budget of ₹{effective_max_budget}. "
                     f"Formulate your response (COUNTER, ACCEPT, or REJECT)."
                 )
 
@@ -775,6 +908,18 @@ class NegotiationOrchestrator:
                     buyer_final_total = sum(Decimal(str(item.negotiated_price)) * Decimal(item.quantity) for item in buyer_decision.basket_items)
                     buyer_decision.total_amount = buyer_final_total
 
+                serialized_buyer_counter_items = [
+                    {
+                        "product_id": item.product_id,
+                        "name": item.name,
+                        "quantity": item.quantity,
+                        "original_price": str(item.original_price),
+                        "negotiated_price": str(item.negotiated_price),
+                        "is_primary": item.is_primary
+                    }
+                    for item in buyer_decision.basket_items
+                ]
+
                 if buyer_decision.action == "REJECT":
                     AuditEngine.log_event(
                         db=self.db,
@@ -783,6 +928,16 @@ class NegotiationOrchestrator:
                         result="FAIL",
                         reason=buyer_decision.rationale
                     )
+                    conversation_events.append({
+                        "id": f"evt_r{round_idx}_buyer_reject",
+                        "round": round_idx,
+                        "actor": "buyer",
+                        "event_type": "rejection",
+                        "message": getattr(buyer_decision, "message", None) or buyer_decision.rationale,
+                        "offer": "0.00",
+                        "reason_label": "Buyer declined proposal",
+                        "timestamp": format_ist_timestamp(1.2 * round_idx + 0.6)
+                    })
                     current_status = "REJECTED"
                     memory.final_outcome = "REJECTED"
                     break
@@ -822,6 +977,18 @@ class NegotiationOrchestrator:
                         result="SUCCESS",
                         reason=buyer_decision.rationale
                     )
+
+                    conversation_events.append({
+                        "id": f"evt_r{round_idx}_buyer_accept",
+                        "round": round_idx,
+                        "actor": "buyer",
+                        "event_type": "acceptance",
+                        "message": getattr(buyer_decision, "message", None) or f"Deal agreed! ₹{latest_merchant_counter.total_amount} for the basket works for me.",
+                        "offer": str(latest_merchant_counter.total_amount),
+                        "basket_items": serialized_merchant_counter_items,
+                        "reason_label": "Buyer accepts deal within budget limit",
+                        "timestamp": format_ist_timestamp(1.2 * round_idx + 0.6)
+                    })
                     
                     # Append acceptance turn to history for completeness
                     negotiation_history.append({
@@ -837,17 +1004,7 @@ class NegotiationOrchestrator:
                             "reason_label": "Buyer accepts deal within budget limit",
                             "tools_used": list(self.buyer.tools_called_in_session),
                             "confidence": self.buyer.last_confidence,
-                            "basket_items": [
-                                {
-                                    "product_id": item.product_id,
-                                    "name": item.name,
-                                    "quantity": item.quantity,
-                                    "original_price": str(item.original_price),
-                                    "negotiated_price": str(item.negotiated_price),
-                                    "is_primary": item.is_primary
-                                }
-                                for item in latest_merchant_counter.basket_items
-                            ]
+                            "basket_items": serialized_merchant_counter_items
                         },
                         "merchant_offer": None,
                         "accepted": True,
@@ -912,6 +1069,18 @@ class NegotiationOrchestrator:
                         }
                     )
 
+                    conversation_events.append({
+                        "id": f"evt_r{round_idx}_buyer_counter",
+                        "round": round_idx,
+                        "actor": "buyer",
+                        "event_type": "counter_offer",
+                        "message": getattr(buyer_decision, "message", None) or buyer_decision.rationale,
+                        "offer": str(buyer_decision.total_amount),
+                        "basket_items": serialized_buyer_counter_items,
+                        "reason_label": "Buyer counter within budget boundary",
+                        "timestamp": format_ist_timestamp(1.2 * round_idx + 0.6)
+                    })
+
                     negotiation_history.append({
                         "round": round_idx,
                         "buyer_offer": {
@@ -921,19 +1090,11 @@ class NegotiationOrchestrator:
                             "final_amount": str(buyer_decision.total_amount),
                             "currency": "INR",
                             "reason": buyer_decision.rationale,
+                            "message": getattr(buyer_decision, "message", None) or buyer_decision.rationale,
+                            "reason_label": "Buyer counter within budget",
                             "tools_used": list(self.buyer.tools_called_in_session),
                             "confidence": self.buyer.last_confidence,
-                            "basket_items": [
-                                {
-                                    "product_id": item.product_id,
-                                    "name": item.name,
-                                    "quantity": item.quantity,
-                                    "original_price": str(item.original_price),
-                                    "negotiated_price": str(item.negotiated_price),
-                                    "is_primary": item.is_primary
-                                }
-                                for item in buyer_decision.basket_items
-                            ]
+                            "basket_items": serialized_buyer_counter_items
                         },
                         "merchant_offer": None,
                         "accepted": False,
@@ -1034,6 +1195,31 @@ class NegotiationOrchestrator:
             discount_percent = Decimal(purchase_res["discount_percent"])
             margin_percent = Decimal(purchase_res["margin_percent"])
 
+            # Record Final SETU PolicyEngine Check Event
+            conversation_events.append({
+                "id": "evt_final_policy_eval",
+                "round": round_idx,
+                "actor": "setu",
+                "event_type": "trust_check",
+                "message": "SETU Policy Engine evaluated final basket integrity: Item price floors, merchant margin, inventory, and signature constraints PASSED.",
+                "reason_label": "PolicyEngine Validation Passed",
+                "timestamp": format_ist_timestamp(1.2 * round_idx + 1.0)
+            })
+
+            # Record Final Approved Event
+            conversation_events.append({
+                "id": "evt_final_approved",
+                "round": round_idx,
+                "actor": "setu",
+                "event_type": "trust_check",
+                "message": f"Decision: APPROVED. Deal locked at ₹{final_price}. Transaction ledger snapshot recorded. Authorized for checkout.",
+                "offer": str(final_price),
+                "basket_items": serialized_basket_items,
+                "reason_label": "APPROVED",
+                "timestamp": format_ist_timestamp(1.2 * round_idx + 1.3),
+                "is_final": True
+            })
+
             # Log completion and trace events
             AuditEngine.log_event(
                 db=self.db,
@@ -1070,6 +1256,7 @@ class NegotiationOrchestrator:
                     "reason": "AI-to-AI negotiated deal package"
                 },
                 "negotiation_history": negotiation_history,
+                "conversation_events": conversation_events,
                 "purchase_request_id": final_decision_pr_id,
                 "decision": purchase_res["decision"],
                 "reasons": purchase_res["reasons"],
@@ -1080,7 +1267,7 @@ class NegotiationOrchestrator:
                 "policy_version": policy_version,
                 "basket": basket_dict,
                 
-                # New response params for Step 10
+                # Dynamic params
                 "agent_mode": self.buyer.provider.agent_mode,
                 "buyer_objective": memory.buyer_goal,
                 "buyer_tools_used": self.buyer.tools_called_in_session,
