@@ -196,6 +196,13 @@ def execute_agent_loop(
                 agent.last_reasoning = proposal.reasoning
                 agent.tools_called_in_session = list(set(agent.tools_called_in_session + [tc["tool_name"] for tc in round_tool_calls]))
                 
+                meta = getattr(provider, "last_execution_metadata", None)
+                agent.last_execution_metadata = meta
+                try:
+                    setattr(decision_obj, "provider_metadata", meta)
+                except Exception:
+                    pass
+
                 return decision_obj
             except ValidationError as ve:
                 logger.warning(f"Final decision validation failed: {ve}")
@@ -211,8 +218,10 @@ def execute_agent_loop(
 
     # Default fallback REJECT if loop terminates without agreeing or validates incorrectly
     logger.warning("Agent reasoning loop timed out or failed validation. Returning default REJECT decision.")
+    meta = getattr(provider, "last_execution_metadata", None)
+    agent.last_execution_metadata = meta
     if schema_class == BuyerDecision:
-        return BuyerDecision(
+        rej_dec = BuyerDecision(
             action="REJECT",
             product_id=agent.registry.execute_tool("search_catalog", db)[0]["id"] if allowed_tools else 1,
             quantity=1,
@@ -221,8 +230,13 @@ def execute_agent_loop(
             rationale="Agent loop timed out without formulating a valid structured decision proposal.",
             constraints_checked=["timeout_safety"]
         )
+        try:
+            setattr(rej_dec, "provider_metadata", meta)
+        except Exception:
+            pass
+        return rej_dec
     else:
-        return MerchantDecision(
+        rej_dec = MerchantDecision(
             action="REJECT",
             product_id=1,
             quantity=1,
@@ -231,3 +245,8 @@ def execute_agent_loop(
             rationale="Agent loop timed out without formulating a valid merchant decision.",
             margin_check="Margin check: FAILED due to timeout exception."
         )
+        try:
+            setattr(rej_dec, "provider_metadata", meta)
+        except Exception:
+            pass
+        return rej_dec

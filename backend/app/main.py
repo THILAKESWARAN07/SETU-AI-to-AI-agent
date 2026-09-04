@@ -79,6 +79,33 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 
 # --- AGENTS & NEGOTIATION ENDPOINTS ---
 
+@app.get("/api/agent/provider-status")
+def get_provider_status():
+    from backend.app.config import settings
+    from backend.app.agents.provider import get_provider
+    
+    configured_provider = os.getenv("LLM_PROVIDER", settings.LLM_PROVIDER).lower()
+    has_gemini_key = bool(os.getenv("GEMINI_API_KEY", settings.GEMINI_API_KEY))
+    has_openai_key = bool(os.getenv("OPENAI_API_KEY", settings.OPENAI_API_KEY))
+    configured_model = os.getenv("LLM_MODEL", settings.LLM_MODEL)
+    timeout_seconds = float(os.getenv("LLM_TIMEOUT_SECONDS", str(settings.LLM_TIMEOUT_SECONDS)))
+    fallback_to_mock = os.getenv("LLM_FALLBACK_TO_MOCK", str(settings.LLM_FALLBACK_TO_MOCK)).lower() in ("true", "1", "yes")
+
+    provider_instance = get_provider()
+    
+    return {
+        "configured_provider": configured_provider,
+        "has_gemini_key": has_gemini_key,
+        "has_openai_key": has_openai_key,
+        "configured_model": configured_model or ("gemini-2.5-flash" if configured_provider == "gemini" else "mock-model-v2"),
+        "timeout_seconds": timeout_seconds,
+        "fallback_to_mock": fallback_to_mock,
+        "active_provider_name": provider_instance.provider_name,
+        "active_model_name": provider_instance.model_name,
+        "active_agent_mode": provider_instance.agent_mode
+    }
+
+
 @app.post("/api/buyer/intent", response_model=schemas.IntentResponse)
 def handle_buyer_intent(request: schemas.IntentRequest, db: Session = Depends(get_db)):
     from backend.app.agents.tools import search_catalog_tool

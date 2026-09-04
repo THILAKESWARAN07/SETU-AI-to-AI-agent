@@ -57,6 +57,11 @@ interface ChatMessage {
   timestamp: string;
   basketItems?: any[];
   isFinal?: boolean;
+  providerUsed?: 'gemini' | 'mock' | 'openai' | string;
+  modelName?: string;
+  fallbackUsed?: boolean;
+  fallbackReason?: string | null;
+  responseLatencyMs?: number;
 }
 
 const mapEventToMessage = (evt: ConversationEvent, idx: number): ChatMessage => {
@@ -89,7 +94,12 @@ const mapEventToMessage = (evt: ConversationEvent, idx: number): ChatMessage => 
     optionalBundleItems: evt.optional_bundle_items,
     timestamp: evt.timestamp || formatISTTime(idx * 0.4),
     basketItems: evt.basket_items,
-    isFinal: evt.is_final
+    isFinal: evt.is_final,
+    providerUsed: evt.provider_used,
+    modelName: evt.model_name,
+    fallbackUsed: evt.fallback_used,
+    fallbackReason: evt.fallback_reason,
+    responseLatencyMs: evt.response_latency_ms
   };
 };
 
@@ -569,6 +579,63 @@ export default function Negotiation() {
                             {msg.proposalType.replace('_', ' ')}
                           </span>
                         )}
+                        {msg.providerUsed === 'gemini' && !msg.fallbackUsed && (
+                          <span className="font-mono" style={{ 
+                            fontSize: '0.65rem', 
+                            padding: '2px 7px', 
+                            borderRadius: '4px', 
+                            background: 'rgba(99, 102, 241, 0.15)', 
+                            color: '#818cf8', 
+                            border: '1px solid rgba(99, 102, 241, 0.3)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}>
+                            <span>🤖</span>
+                            <span>{msg.modelName || 'Gemini'}</span>
+                            {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
+                              <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
+                            )}
+                          </span>
+                        )}
+                        {msg.fallbackUsed && (
+                          <span className="font-mono" style={{ 
+                            fontSize: '0.65rem', 
+                            padding: '2px 7px', 
+                            borderRadius: '4px', 
+                            background: 'rgba(245, 158, 11, 0.15)', 
+                            color: '#fbbf24', 
+                            border: '1px solid rgba(245, 158, 11, 0.3)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }} title={msg.fallbackReason || 'Primary LLM timed out / unavailable'}>
+                            <span>🧪</span>
+                            <span>Mock Fallback</span>
+                            {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
+                              <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
+                            )}
+                          </span>
+                        )}
+                        {msg.providerUsed === 'mock' && !msg.fallbackUsed && (
+                          <span className="font-mono" style={{ 
+                            fontSize: '0.65rem', 
+                            padding: '2px 7px', 
+                            borderRadius: '4px', 
+                            background: 'rgba(148, 163, 184, 0.12)', 
+                            color: '#94a3b8', 
+                            border: '1px solid rgba(148, 163, 184, 0.25)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}>
+                            <span>🧪</span>
+                            <span>Mock Provider</span>
+                            {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
+                              <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
+                            )}
+                          </span>
+                        )}
                       </div>
 
                       {stratLabel && (
@@ -780,6 +847,57 @@ export default function Negotiation() {
                 }}>
                   {isDealApproved ? 'APPROVED' : isDealRequiresApproval ? 'REQUIRES APPROVAL' : isDealBlocked ? 'REJECTED' : 'PENDING NEGOTIATION'}
                 </span>
+              </div>
+
+              {/* Provider Observability Card */}
+              <div style={{
+                background: 'rgba(255, 255, 255, 0.02)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '8px',
+                padding: '12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Sparkles style={{ width: '13px', height: '13px', color: '#818cf8' }} />
+                    <span className="font-mono" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-main)' }}>AI PROVIDER AUDIT</span>
+                  </div>
+                  {result?.provider_summary && (
+                    <span className="font-mono" style={{
+                      fontSize: '0.62rem',
+                      padding: '2px 5px',
+                      borderRadius: '4px',
+                      background: result.provider_summary.all_agent_turns_used_gemini ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                      color: result.provider_summary.all_agent_turns_used_gemini ? '#10b981' : '#fbbf24',
+                      border: `1px solid ${result.provider_summary.all_agent_turns_used_gemini ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`
+                    }}>
+                      {result.provider_summary.all_agent_turns_used_gemini ? '100% REAL GEMINI' : result.provider_summary.fallback_count > 0 ? 'FALLBACK TRIGGERED' : 'MOCK / HYBRID'}
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '0.7rem' }}>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.65rem' }}>Gemini Turns</span>
+                    <span className="font-mono" style={{ fontSize: '0.9rem', fontWeight: 700, color: '#818cf8' }}>
+                      {result?.provider_summary?.gemini_calls ?? messages.filter(m => m.providerUsed === 'gemini' && !m.fallbackUsed).length}
+                    </span>
+                  </div>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.65rem' }}>Mock Turns</span>
+                    <span className="font-mono" style={{ fontSize: '0.9rem', fontWeight: 700, color: '#94a3b8' }}>
+                      {result?.provider_summary?.mock_calls ?? messages.filter(m => m.providerUsed === 'mock' || m.fallbackUsed).length}
+                    </span>
+                  </div>
+                </div>
+
+                {result?.provider_summary?.fallback_count ? (
+                  <div style={{ fontSize: '0.68rem', color: '#fbbf24', background: 'rgba(245, 158, 11, 0.08)', padding: '4px 6px', borderRadius: '4px', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
+                    ⚠️ {result.provider_summary.fallback_count} turn(s) fell back to MockProvider.
+                  </div>
+                ) : null}
               </div>
             </div>
 

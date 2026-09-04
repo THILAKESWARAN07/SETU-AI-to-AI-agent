@@ -70,9 +70,20 @@ class MerchantDecision(BaseModel):
     basket_items: Optional[List[BasketItemSchema]] = Field(default=None, description="The items inside the proposed bundle/basket.")
 
 
+class ProviderExecutionMetadata(BaseModel):
+    provider_used: str = Field(..., description="Provider used: 'gemini', 'mock', or 'openai'")
+    model_name: Optional[str] = Field(default=None, description="Model identifier used")
+    fallback_used: bool = Field(default=False, description="Whether fallback provider was engaged")
+    fallback_reason: Optional[str] = Field(default=None, description="Reason/error for falling back")
+    response_latency_ms: float = Field(default=0.0, description="Response time in milliseconds")
+
+
 # --- PROVIDER INTERFACE ---
 
 class LLMProvider(ABC):
+    def __init__(self):
+        self.last_execution_metadata: Optional[ProviderExecutionMetadata] = None
+
     @property
     def agent_mode(self) -> str:
         return "LIVE LLM"
@@ -84,6 +95,9 @@ class LLMProvider(ABC):
     @property
     def model_name(self) -> str:
         return "generic-model"
+
+    def get_last_execution_metadata(self) -> Optional[ProviderExecutionMetadata]:
+        return self.last_execution_metadata
 
     @abstractmethod
     def generate_response(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -106,6 +120,9 @@ class MockProvider(LLMProvider):
     """
     Deterministic Mock LLM Provider that allows testing without external LLM APIs.
     """
+    def __init__(self):
+        super().__init__()
+
     @property
     def agent_mode(self) -> str:
         return "OFFLINE MOCK"
@@ -117,7 +134,22 @@ class MockProvider(LLMProvider):
     @property
     def model_name(self) -> str:
         return "mock-model-v2"
+
     def generate_response(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+        import time
+        start_t = time.perf_counter()
+        res = self._mock_response_internal(prompt, system_instruction, tools)
+        latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+        self.last_execution_metadata = ProviderExecutionMetadata(
+            provider_used="mock",
+            model_name=self.model_name,
+            fallback_used=False,
+            fallback_reason=None,
+            response_latency_ms=latency_ms
+        )
+        return res
+
+    def _mock_response_internal(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         prompt_lower = prompt.lower()
 
         # 1. Attack scenario: malicious discount request
@@ -414,6 +446,20 @@ class MockProvider(LLMProvider):
         return "audio"
 
     def generate_structured_response(self, prompt: str, system_instruction: str, schema_class: Type[BaseModel]) -> BaseModel:
+        import time
+        start_t = time.perf_counter()
+        res = self._mock_structured_response_internal(prompt, system_instruction, schema_class)
+        latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+        self.last_execution_metadata = ProviderExecutionMetadata(
+            provider_used="mock",
+            model_name=self.model_name,
+            fallback_used=False,
+            fallback_reason=None,
+            response_latency_ms=latency_ms
+        )
+        return res
+
+    def _mock_structured_response_internal(self, prompt: str, system_instruction: str, schema_class: Type[BaseModel]) -> BaseModel:
         prompt_lower = prompt.lower()
         target_context = self._extract_target_context(prompt)
 
@@ -1019,8 +1065,9 @@ class GeminiProvider(LLMProvider):
         return self._model_name
 
     def __init__(self, api_key: str, model_name: Optional[str] = None):
+        super().__init__()
         self.api_key = api_key
-        self._model_name = model_name or "gemini-1.5-flash"
+        self._model_name = model_name or os.getenv("LLM_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite"
         try:
             import google.generativeai as genai
             genai.configure(api_key=self.api_key)
@@ -1032,21 +1079,53 @@ class GeminiProvider(LLMProvider):
         if not self.genai:
             raise ImportError("google-generativeai package is not installed. Run 'pip install google-generativeai'.")
         
-        # Non-blocking spacer to respect rate limits
         import time
+        start_t = time.perf_counter()
+        
+        # Non-blocking spacer to respect rate limits
         time.sleep(0.1)
 
         # Call Google Gemini API
         model = self.genai.GenerativeModel(self.model_name, system_instruction=system_instruction)
-        response = model.generate_content(prompt)
+        max_retries = 3
+        response = None
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(prompt)
+                break
+            except Exception as e:
+                err_str = str(e)
+                if ("ResourceExhausted" in err_str or "429" in err_str) and attempt < max_retries - 1:
+                    wait_sec = 12.0 * (attempt + 1)
+                    match = re.search(r'retry in\s+([\d\.]+)\s*s', err_str, re.IGNORECASE)
+                    if match:
+                        try:
+                            wait_sec = min(float(match.group(1)) + 1.5, 60.0)
+                        except Exception:
+                            pass
+                    logger.warning(f"GeminiProvider 429 rate limit hit. Backing off for {wait_sec:.1f}s (retry {attempt+1}/{max_retries})...")
+                    time.sleep(wait_sec)
+                else:
+                    raise e
+                    
+        latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+        self.last_execution_metadata = ProviderExecutionMetadata(
+            provider_used="gemini",
+            model_name=self.model_name,
+            fallback_used=False,
+            fallback_reason=None,
+            response_latency_ms=latency_ms
+        )
         return {"text": response.text, "tool_calls": []}
 
     def generate_structured_response(self, prompt: str, system_instruction: str, schema_class: Type[BaseModel]) -> BaseModel:
         if not self.genai:
             raise ImportError("google-generativeai package is not installed.")
         
-        # Non-blocking spacer to respect rate limits
         import time
+        start_t = time.perf_counter()
+        
+        # Non-blocking spacer to respect rate limits
         time.sleep(0.1)
 
         # Clean Pydantic schema dict to match Google Generative AI Schema proto requirements
@@ -1102,11 +1181,40 @@ class GeminiProvider(LLMProvider):
         
         # Gemini supports structured JSON outputs with response_schema
         model = self.genai.GenerativeModel(self.model_name, system_instruction=system_instruction)
-        response = model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json", "response_schema": clean_schema}
-        )
+        
+        max_retries = 3
+        response = None
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(
+                    prompt,
+                    generation_config={"response_mime_type": "application/json", "response_schema": clean_schema}
+                )
+                break
+            except Exception as e:
+                err_str = str(e)
+                if ("ResourceExhausted" in err_str or "429" in err_str) and attempt < max_retries - 1:
+                    wait_sec = 12.0 * (attempt + 1)
+                    match = re.search(r'retry in\s+([\d\.]+)\s*s', err_str, re.IGNORECASE)
+                    if match:
+                        try:
+                            wait_sec = min(float(match.group(1)) + 1.5, 60.0)
+                        except Exception:
+                            pass
+                    logger.warning(f"GeminiProvider 429 rate limit hit. Backing off for {wait_sec:.1f}s (retry {attempt+1}/{max_retries})...")
+                    time.sleep(wait_sec)
+                else:
+                    raise e
+
         data = json.loads(response.text)
+        latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+        self.last_execution_metadata = ProviderExecutionMetadata(
+            provider_used="gemini",
+            model_name=self.model_name,
+            fallback_used=False,
+            fallback_reason=None,
+            response_latency_ms=latency_ms
+        )
         return schema_class(**data)
 
 
@@ -1120,8 +1228,9 @@ class OpenAIProvider(LLMProvider):
         return self._model_name
 
     def __init__(self, api_key: str, model_name: Optional[str] = None):
+        super().__init__()
         self.api_key = api_key
-        self._model_name = model_name or "gpt-4o-mini"
+        self._model_name = model_name or os.getenv("LLM_MODEL") or "gpt-4o-mini"
         try:
             import openai
             self.client = openai.OpenAI(api_key=self.api_key)
@@ -1131,7 +1240,8 @@ class OpenAIProvider(LLMProvider):
     def generate_response(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not self.client:
             raise ImportError("openai package is not installed. Run 'pip install openai'.")
-        # Standard OpenAI ChatCompletion call
+        import time
+        start_t = time.perf_counter()
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=[
@@ -1139,12 +1249,21 @@ class OpenAIProvider(LLMProvider):
                 {"role": "user", "content": prompt}
             ]
         )
+        latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+        self.last_execution_metadata = ProviderExecutionMetadata(
+            provider_used="openai",
+            model_name=self.model_name,
+            fallback_used=False,
+            fallback_reason=None,
+            response_latency_ms=latency_ms
+        )
         return {"text": response.choices[0].message.content or "", "tool_calls": []}
 
     def generate_structured_response(self, prompt: str, system_instruction: str, schema_class: Type[BaseModel]) -> BaseModel:
         if not self.client:
             raise ImportError("openai package is not installed.")
-        # OpenAI supports structured outputs with response_format=schema_class
+        import time
+        start_t = time.perf_counter()
         response = self.client.beta.chat.completions.parse(
             model=self.model_name,
             messages=[
@@ -1156,6 +1275,14 @@ class OpenAIProvider(LLMProvider):
         parsed = response.choices[0].message.parsed
         if parsed is None:
             raise ValueError("Failed to parse structured output from OpenAI.")
+        latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+        self.last_execution_metadata = ProviderExecutionMetadata(
+            provider_used="openai",
+            model_name=self.model_name,
+            fallback_used=False,
+            fallback_reason=None,
+            response_latency_ms=latency_ms
+        )
         return parsed
 
 
@@ -1165,7 +1292,8 @@ class FallbackProvider(LLMProvider):
     If the primary provider fails (e.g. 429 Quota Exhausted, 401 Unauthorized, Network timeout),
     it smoothly falls back to the deterministic MockProvider and records provider metadata.
     """
-    def __init__(self, primary: LLMProvider, fallback: Optional[LLMProvider] = None, timeout_seconds: float = 3.5):
+    def __init__(self, primary: LLMProvider, fallback: Optional[LLMProvider] = None, timeout_seconds: float = 10.0):
+        super().__init__()
         self.primary = primary
         self.fallback = fallback or MockProvider()
         self.timeout_seconds = timeout_seconds
@@ -1191,34 +1319,102 @@ class FallbackProvider(LLMProvider):
         return self.primary.model_name
 
     def generate_response(self, prompt: str, system_instruction: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+        import time
+        start_t = time.perf_counter()
         if self.fallback_active:
-            return self.fallback.generate_response(prompt, system_instruction, tools)
+            res = self.fallback.generate_response(prompt, system_instruction, tools)
+            latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+            self.last_execution_metadata = ProviderExecutionMetadata(
+                provider_used="mock",
+                model_name=self.fallback.model_name,
+                fallback_used=True,
+                fallback_reason=self.fallback_error or "Fallback active from previous failure",
+                response_latency_ms=latency_ms
+            )
+            return res
 
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(self.primary.generate_response, prompt, system_instruction, tools)
             try:
-                return future.result(timeout=self.timeout_seconds)
+                res = future.result(timeout=self.timeout_seconds)
+                latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+                p_meta = getattr(self.primary, "last_execution_metadata", None)
+                if p_meta:
+                    self.last_execution_metadata = p_meta
+                else:
+                    self.last_execution_metadata = ProviderExecutionMetadata(
+                        provider_used=self.primary.provider_name.lower(),
+                        model_name=self.primary.model_name,
+                        fallback_used=False,
+                        fallback_reason=None,
+                        response_latency_ms=latency_ms
+                    )
+                return res
             except Exception as e:
-                logger.warning(f"Primary provider '{self.primary.provider_name}' failed ({type(e).__name__}: {e}). Activating MockProvider fallback.")
+                err_msg = f"{type(e).__name__}: {str(e)}"
+                logger.warning(f"Primary provider '{self.primary.provider_name}' failed ({err_msg}). Activating MockProvider fallback.")
                 self.fallback_active = True
-                self.fallback_error = str(e)
-                return self.fallback.generate_response(prompt, system_instruction, tools)
+                self.fallback_error = err_msg
+                res = self.fallback.generate_response(prompt, system_instruction, tools)
+                latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+                self.last_execution_metadata = ProviderExecutionMetadata(
+                    provider_used="mock",
+                    model_name=self.fallback.model_name,
+                    fallback_used=True,
+                    fallback_reason=self.fallback_error,
+                    response_latency_ms=latency_ms
+                )
+                return res
 
     def generate_structured_response(self, prompt: str, system_instruction: str, schema_class: Type[BaseModel]) -> BaseModel:
+        import time
+        start_t = time.perf_counter()
         if self.fallback_active:
-            return self.fallback.generate_structured_response(prompt, system_instruction, schema_class)
+            res = self.fallback.generate_structured_response(prompt, system_instruction, schema_class)
+            latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+            self.last_execution_metadata = ProviderExecutionMetadata(
+                provider_used="mock",
+                model_name=self.fallback.model_name,
+                fallback_used=True,
+                fallback_reason=self.fallback_error or "Fallback active from previous failure",
+                response_latency_ms=latency_ms
+            )
+            return res
 
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(self.primary.generate_structured_response, prompt, system_instruction, schema_class)
             try:
-                return future.result(timeout=self.timeout_seconds)
+                res = future.result(timeout=self.timeout_seconds)
+                latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+                p_meta = getattr(self.primary, "last_execution_metadata", None)
+                if p_meta:
+                    self.last_execution_metadata = p_meta
+                else:
+                    self.last_execution_metadata = ProviderExecutionMetadata(
+                        provider_used=self.primary.provider_name.lower(),
+                        model_name=self.primary.model_name,
+                        fallback_used=False,
+                        fallback_reason=None,
+                        response_latency_ms=latency_ms
+                    )
+                return res
             except Exception as e:
-                logger.warning(f"Primary provider '{self.primary.provider_name}' structured response failed ({type(e).__name__}: {e}). Activating MockProvider fallback.")
+                err_msg = f"{type(e).__name__}: {str(e)}"
+                logger.warning(f"Primary provider '{self.primary.provider_name}' structured response failed ({err_msg}). Activating MockProvider fallback.")
                 self.fallback_active = True
-                self.fallback_error = str(e)
-                return self.fallback.generate_structured_response(prompt, system_instruction, schema_class)
+                self.fallback_error = err_msg
+                res = self.fallback.generate_structured_response(prompt, system_instruction, schema_class)
+                latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
+                self.last_execution_metadata = ProviderExecutionMetadata(
+                    provider_used="mock",
+                    model_name=self.fallback.model_name,
+                    fallback_used=True,
+                    fallback_reason=self.fallback_error,
+                    response_latency_ms=latency_ms
+                )
+                return res
 
 
 def get_provider() -> LLMProvider:
@@ -1234,6 +1430,8 @@ def get_provider() -> LLMProvider:
     else:
         fallback_allowed = settings.LLM_FALLBACK_TO_MOCK
     
+    timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", str(getattr(settings, "LLM_TIMEOUT_SECONDS", 10.0))))
+    
     api_key = os.getenv("LLM_API_KEY", settings.LLM_API_KEY)
     model_name = os.getenv("LLM_MODEL", settings.LLM_MODEL)
 
@@ -1243,7 +1441,7 @@ def get_provider() -> LLMProvider:
             try:
                 gemini_inst = GeminiProvider(gemini_key, model_name=model_name)
                 if fallback_allowed:
-                    return FallbackProvider(primary=gemini_inst, fallback=MockProvider(), timeout_seconds=3.5)
+                    return FallbackProvider(primary=gemini_inst, fallback=MockProvider(), timeout_seconds=timeout_sec)
                 return gemini_inst
             except Exception as e:
                 logger.error(f"Failed to initialize GeminiProvider: {e}")
@@ -1260,7 +1458,7 @@ def get_provider() -> LLMProvider:
             try:
                 openai_inst = OpenAIProvider(openai_key, model_name=model_name)
                 if fallback_allowed:
-                    return FallbackProvider(primary=openai_inst, fallback=MockProvider(), timeout_seconds=3.5)
+                    return FallbackProvider(primary=openai_inst, fallback=MockProvider(), timeout_seconds=timeout_sec)
                 return openai_inst
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAIProvider: {e}")

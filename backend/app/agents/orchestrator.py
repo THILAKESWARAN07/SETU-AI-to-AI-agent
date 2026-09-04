@@ -172,8 +172,11 @@ class NegotiationOrchestrator:
         negotiation_history = []
         conversation_events = []
         event_seq = 0
+        provider_call_records = []
+        current_buyer_meta = None
+        current_merchant_meta = None
 
-        def emit_event(evt_data: Dict[str, Any]):
+        def emit_event(evt_data: Dict[str, Any], meta: Optional[Any] = None):
             nonlocal event_seq
             event_seq += 1
             evt_data["sequence"] = event_seq
@@ -181,12 +184,55 @@ class NegotiationOrchestrator:
                 evt_data["event_id"] = evt_data.get("id", f"evt_{event_seq}")
             if "type" not in evt_data:
                 evt_data["type"] = evt_data.get("event_type", "message")
+            
+            # Attach provider metadata if it's an AI agent turn
+            effective_meta = meta
+            if effective_meta is None and evt_data.get("actor") in ("buyer", "merchant"):
+                if evt_data.get("actor") == "buyer":
+                    effective_meta = current_buyer_meta
+                elif evt_data.get("actor") == "merchant":
+                    effective_meta = current_merchant_meta
+
+            if effective_meta:
+                if isinstance(effective_meta, dict):
+                    evt_data["provider_used"] = effective_meta.get("provider_used", "mock")
+                    evt_data["model_name"] = effective_meta.get("model_name", "mock-model-v2")
+                    evt_data["fallback_used"] = bool(effective_meta.get("fallback_used", False))
+                    evt_data["fallback_reason"] = effective_meta.get("fallback_reason", None)
+                    evt_data["response_latency_ms"] = effective_meta.get("response_latency_ms", 0.0)
+                else:
+                    evt_data["provider_used"] = getattr(effective_meta, "provider_used", "mock")
+                    evt_data["model_name"] = getattr(effective_meta, "model_name", "mock-model-v2")
+                    evt_data["fallback_used"] = bool(getattr(effective_meta, "fallback_used", False))
+                    evt_data["fallback_reason"] = getattr(effective_meta, "fallback_reason", None)
+                    evt_data["response_latency_ms"] = getattr(effective_meta, "response_latency_ms", 0.0)
+                
+                evt_data["provider_execution"] = {
+                    "provider_used": evt_data["provider_used"],
+                    "model_name": evt_data["model_name"],
+                    "fallback_used": evt_data["fallback_used"],
+                    "fallback_reason": evt_data["fallback_reason"],
+                    "response_latency_ms": evt_data["response_latency_ms"]
+                }
+
             conversation_events.append(evt_data)
             if on_event:
                 try:
                     on_event(evt_data)
                 except Exception as e:
                     logger.warning(f"Error in on_event callback: {e}")
+
+        def compute_provider_summary():
+            gemini_calls = sum(1 for m in provider_call_records if m and (getattr(m, "provider_used", None) == "gemini" or (isinstance(m, dict) and m.get("provider_used") == "gemini")))
+            mock_calls = sum(1 for m in provider_call_records if m and (getattr(m, "provider_used", None) == "mock" or (isinstance(m, dict) and m.get("provider_used") == "mock")))
+            fallback_count = sum(1 for m in provider_call_records if m and (getattr(m, "fallback_used", False) or (isinstance(m, dict) and m.get("fallback_used"))))
+            all_gemini = (gemini_calls > 0 and mock_calls == 0 and fallback_count == 0)
+            return {
+                "gemini_calls": gemini_calls,
+                "mock_calls": mock_calls,
+                "fallback_count": fallback_count,
+                "all_agent_turns_used_gemini": all_gemini
+            }
 
         current_status = "IN_PROGRESS"
         final_decision_pr_id = None
@@ -263,7 +309,8 @@ class NegotiationOrchestrator:
                 "session_id": session_id,
                 "agent_role": "BUYER_AGENT & MERCHANT_AGENT",
                 "start_time": start_time,
-                "completion_time": completion_time
+                "completion_time": completion_time,
+                "provider_summary": compute_provider_summary()
             }
 
         # Legacy E2E and UI compatibility log triggers
@@ -405,6 +452,9 @@ class NegotiationOrchestrator:
         # Generate buyer decision using the runtime loop
         try:
             buyer_decision: BuyerDecision = self.buyer.negotiate_decision(self.db, buyer_prompt, memory=memory)
+            current_buyer_meta = getattr(buyer_decision, "provider_metadata", None) or getattr(self.buyer, "last_execution_metadata", None) or getattr(self.buyer.provider, "last_execution_metadata", None)
+            if current_buyer_meta:
+                provider_call_records.append(current_buyer_meta)
         except Exception as e:
             logger.error(f"Buyer Agent LLM failure: {e}")
             AuditEngine.log_event(
@@ -658,6 +708,9 @@ class NegotiationOrchestrator:
 
             try:
                 merchant_decision: MerchantDecision = self.merchant.negotiate_decision(self.db, merchant_prompt, memory=memory)
+                current_merchant_meta = getattr(merchant_decision, "provider_metadata", None) or getattr(self.merchant, "last_execution_metadata", None) or getattr(self.merchant.provider, "last_execution_metadata", None)
+                if current_merchant_meta:
+                    provider_call_records.append(current_merchant_meta)
             except Exception as e:
                 logger.error(f"Merchant Agent LLM failure: {e}")
                 AuditEngine.log_event(
@@ -1120,6 +1173,9 @@ class NegotiationOrchestrator:
 
                 try:
                     buyer_decision = self.buyer.negotiate_decision(self.db, buyer_eval_prompt, memory=memory)
+                    current_buyer_meta = getattr(buyer_decision, "provider_metadata", None) or getattr(self.buyer, "last_execution_metadata", None) or getattr(self.buyer.provider, "last_execution_metadata", None)
+                    if current_buyer_meta:
+                        provider_call_records.append(current_buyer_meta)
                 except Exception as e:
                     logger.error(f"Buyer Agent LLM failure: {e}")
                     AuditEngine.log_event(
@@ -1621,7 +1677,8 @@ class NegotiationOrchestrator:
                 "session_id": session_id,
                 "agent_role": "BUYER_AGENT & MERCHANT_AGENT",
                 "start_time": start_time,
-                "completion_time": completion_time
+                "completion_time": completion_time,
+                "provider_summary": compute_provider_summary()
             }
 
         else:

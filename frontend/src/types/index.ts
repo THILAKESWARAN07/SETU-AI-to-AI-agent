@@ -139,6 +139,13 @@ export interface ConversationEvent {
   reason_label?: string;
   timestamp?: string;
   is_final?: boolean;
+  
+  // Provider Observability Metadata
+  provider_used?: 'gemini' | 'mock' | 'openai' | string;
+  model_name?: string;
+  fallback_used?: boolean;
+  fallback_reason?: string | null;
+  response_latency_ms?: number;
 }
 
 export interface DemoCommerceResponse {
@@ -183,6 +190,14 @@ export interface DemoCommerceResponse {
   session_id?: string;
   start_time?: string;
   completion_time?: string;
+
+  // Provider Execution Summary
+  provider_summary?: {
+    gemini_calls: number;
+    mock_calls: number;
+    fallback_count: number;
+    all_agent_turns_used_gemini: boolean;
+  };
 }
 
 export interface AttackTestRequest {
