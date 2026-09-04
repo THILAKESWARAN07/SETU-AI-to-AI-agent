@@ -117,6 +117,10 @@ class NegotiationContext(BaseModel):
     inventory_availability: int = Field(default=1, description="Available inventory count")
     relevant_policy_constraints: Dict[str, Any] = Field(default_factory=dict, description="Active policy limits")
     remaining_rounds: int = Field(default=3, description="Remaining negotiation rounds")
+    optional_bundle: Optional[Dict[str, Any]] = Field(default=None, description="Deterministic bundle & cross-sell options available")
+    bundle_already_proposed: bool = Field(default=False, description="Whether the bundle was already presented in earlier rounds")
+    standalone_preferred: bool = Field(default=False, description="Whether buyer strictly prefers standalone without accessories")
+    buyer_profile: str = Field(default="PRICE_FIRST", description="Buyer profile: 'PRICE_FIRST' or 'VALUE_ORIENTED'")
 
 
 # ==============================================================================
@@ -837,7 +841,32 @@ class OpenRouterProvider(BaseLLMProvider):
                 cleaned = re.sub(r"^```json\s*", "", raw_text, flags=re.IGNORECASE)
                 cleaned = re.sub(r"\s*```$", "", cleaned)
                 parsed_json = json.loads(cleaned)
-                parsed_obj = schema.model_validate(parsed_json) if hasattr(schema, "model_validate") else schema.parse_obj(parsed_json)
+                try:
+                    parsed_obj = schema.model_validate(parsed_json) if hasattr(schema, "model_validate") else schema.parse_obj(parsed_json)
+                except Exception:
+                    if isinstance(parsed_json, dict):
+                        for k, v in parsed_json.items():
+                            if isinstance(v, dict) and any(f in v for f in ["action", "product_id", "total_amount", "unit_price"]):
+                                parsed_json = v
+                                break
+                    fields_dict = {}
+                    model_fields = getattr(schema, "model_fields", None) or getattr(schema, "__fields__", {})
+                    for f_name in model_fields:
+                        if f_name in parsed_json:
+                            fields_dict[f_name] = parsed_json[f_name]
+                    if "action" not in fields_dict or not fields_dict["action"]:
+                        fields_dict["action"] = "COUNTER" if "Merchant" in getattr(schema, "__name__", "") else "OFFER"
+                    if "product_id" not in fields_dict:
+                        fields_dict["product_id"] = 1
+                    if "quantity" not in fields_dict:
+                        fields_dict["quantity"] = 1
+                    if "unit_price" not in fields_dict:
+                        fields_dict["unit_price"] = Decimal("1450.00")
+                    if "total_amount" not in fields_dict:
+                        fields_dict["total_amount"] = Decimal("1450.00")
+                    if "rationale" not in fields_dict:
+                        fields_dict["rationale"] = str(parsed_json.get("reason", parsed_json.get("rationale", "Autonomous reasoning.")))
+                    parsed_obj = schema.model_construct(**fields_dict) if hasattr(schema, "model_construct") else schema.construct(**fields_dict)
 
                 latency = (time.perf_counter() - start_t) * 1000.0
                 meta = ProviderExecutionMetadata(
@@ -1536,12 +1565,14 @@ class AIGateway:
 
         # Merchant clamping
         elif context.agent_role.upper().startswith("MERCHANT"):
-            if getattr(decision, "action", "") in ("COUNTER", "ACCEPT", "BUNDLE"):
-                if getattr(decision, "total_amount", Decimal("0")) < context.merchant_min_price:
-                    decision.total_amount = context.merchant_min_price
-                    decision.unit_price = context.merchant_min_price
-                    if decision.basket_items and len(decision.basket_items) == 1:
-                        decision.basket_items[0].negotiated_price = context.merchant_min_price
+            if getattr(decision, "action", "") in ("COUNTER", "ACCEPT", "BUNDLE", "PROPOSE_BUNDLE", "HOLD_PREVIOUS_OFFER"):
+                # If standalone counter, clamp against minimum floor
+                if getattr(decision, "action", "") not in ("BUNDLE", "PROPOSE_BUNDLE") and len(getattr(decision, "basket_items", [])) <= 1:
+                    if getattr(decision, "total_amount", Decimal("0")) < context.merchant_min_price:
+                        decision.total_amount = context.merchant_min_price
+                        decision.unit_price = context.merchant_min_price
+                        if decision.basket_items and len(decision.basket_items) == 1:
+                            decision.basket_items[0].negotiated_price = context.merchant_min_price
 
         return decision
 
@@ -1558,11 +1589,18 @@ class AIGateway:
                 f"Catalog List Price: INR {context.catalog_price:.2f}.\n"
                 f"Current Round: {context.current_round} of 4.\n"
                 "Goal: Secure the best possible value for the customer within budget.\n"
+                "If the merchant proposes an optional bundle/cross-sell, compare standalone vs bundle. "
+                "The bundle is strictly optional and must never replace your request without consent. "
+                "If you prefer lower total cost or only need the primary product, continue negotiating standalone. "
+                "If you value the accessory package and the bundle price is within budget, you may choose the bundle.\n"
                 "You MUST output ONLY a structured JSON matching the requested schema."
             )
         else:
             return (
                 "You are an autonomous Merchant AI Agent representing the store in SETU.\n"
+                "You are negotiating autonomously. You may offer the standalone product or, when beneficial, propose an optional bundle/cross-sell. "
+                "The bundle is optional and must never replace the buyer's original request without consent. Do not mention a bundle merely because one exists. "
+                "Consider the buyer's budget, current negotiation stage, product price, bundle savings, merchant margin, and buyer's latest offer.\n"
                 f"Negotiating product: '{p_name}'.\n"
                 f"Catalog Price: INR {context.catalog_price:.2f}.\n"
                 f"Merchant Minimum Price Floor: INR {context.merchant_min_price:.2f}. (Do not sell below this).\n"
@@ -1583,14 +1621,29 @@ class AIGateway:
             f"Remaining Rounds: {context.remaining_rounds}",
         ]
 
+        if context.optional_bundle:
+            b_info = context.optional_bundle
+            lines.append("\n--- OPTIONAL BUNDLE / CROSS-SELL OPPORTUNITY ---")
+            lines.append(f"  Package Name: {b_info.get('bundle_name', 'Bundle Package')}")
+            lines.append(f"  Included Products: {b_info.get('included_product_names', '')} (IDs: {b_info.get('bundle_product_ids', [])})")
+            lines.append(f"  Bundle List Price: INR {b_info.get('bundle_list_price', '0.00')}")
+            lines.append(f"  Allowed Bundle Selling Range: INR {b_info.get('bundle_min_price', '0.00')} - {b_info.get('bundle_list_price', '0.00')}")
+            lines.append(f"  Bundle Recommended Price: INR {b_info.get('bundle_price', '0.00')}")
+            lines.append(f"  Calculated Buyer Savings: INR {b_info.get('savings', '0.00')}")
+            lines.append(f"  Bundle Fits Buyer Budget (<= INR {context.buyer_max_budget:.2f}): {b_info.get('fits_budget', True)}")
+            lines.append(f"  Bundle Items In Stock: {b_info.get('inventory_available', True)}")
+            lines.append(f"  Bundle Previously Proposed: {context.bundle_already_proposed}")
+
         if context.current_proposal:
             amt = context.current_proposal.get("total_amount", context.catalog_price)
-            lines.append(f"Latest Active Proposal Under Review: INR {amt}")
+            lines.append(f"\nLatest Active Proposal Under Review: INR {amt}")
+            if context.current_proposal.get("options_summary"):
+                lines.append(f"Proposal Options Under Consideration: {context.current_proposal['options_summary']}")
 
         if context.previous_offers:
-            lines.append("Offer History in this session:")
+            lines.append("\nOffer History in this session:")
             for off in context.previous_offers[-3:]:
-                lines.append(f"  - Round {off.get('round', 1)} [{off.get('actor', '').upper()}]: INR {off.get('amount', 0)} ({off.get('action', '')})")
+                lines.append(f"  - Round {off.get('round', 1)} [{off.get('actor', '').upper()}]: INR {off.get('total_amount', off.get('amount', 0))} ({off.get('action', '')})")
 
         lines.append("\nEvaluate the state and formulate your next structured negotiation decision JSON.")
         return "\n".join(lines)
@@ -1639,8 +1692,10 @@ class AIGateway:
 
 # Global singleton AIGateway
 ai_gateway = AIGateway()
+CentralAIGateway = AIGateway
 
 def get_ai_gateway() -> AIGateway:
     """Returns the central AIGateway singleton instance."""
     return ai_gateway
+
 

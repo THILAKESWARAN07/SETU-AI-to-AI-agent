@@ -169,6 +169,8 @@ export interface DemoCommerceResponse {
   margin_percent: string;
   policy_version: string;
   basket?: any;
+  basket_type?: string;
+  selected_basket_type?: string;
   
   // Proposal and Offer Lifecycle
   buyer_opening_offer?: any;

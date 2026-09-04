@@ -46,8 +46,18 @@ class BasketItemSchema(BaseModel):
     is_primary: bool = Field(..., description="Whether this is the primary requested product.")
 
 
+class BundleProposalSchema(BaseModel):
+    proposal_id: Optional[str] = Field(default=None, description="Proposal identifier e.g. prop_m_r1_bundle")
+    is_optional: bool = Field(default=True, description="Whether the bundle is an optional alternative to standalone")
+    bundle_name: Optional[str] = Field(default=None, description="Name or summary of the bundle package")
+    basket_items: Optional[List[BasketItemSchema]] = Field(default=None, description="Items included in the bundle")
+    standalone_price: Optional[Decimal] = Field(default=None, description="Standalone counter price for primary product")
+    bundle_price: Optional[Decimal] = Field(default=None, description="Total price for the bundle")
+    savings: Optional[Decimal] = Field(default=None, description="Calculated positive buyer savings compared to individual item list prices")
+
+
 class BuyerDecision(BaseModel):
-    action: Literal["OFFER", "COUNTER", "ACCEPT", "REJECT"] = Field(..., description="The action taken by the buyer agent.")
+    action: Literal["OFFER", "COUNTER", "ACCEPT", "REJECT", "ACCEPT_BUNDLE", "REJECT_BUNDLE"] = Field(..., description="The action taken by the buyer agent.")
     product_id: int = Field(..., description="The product key in the catalog.")
     quantity: int = Field(default=1, description="The quantity requested.")
     unit_price: Decimal = Field(..., description="The unit price offered/countered.")
@@ -59,7 +69,7 @@ class BuyerDecision(BaseModel):
 
 
 class MerchantDecision(BaseModel):
-    action: Literal["COUNTER", "ACCEPT", "REJECT", "BUNDLE"] = Field(..., description="The action taken by the merchant agent.")
+    action: Literal["COUNTER", "ACCEPT", "REJECT", "BUNDLE", "PROPOSE_BUNDLE", "HOLD_PREVIOUS_OFFER"] = Field(..., description="The action taken by the merchant agent.")
     product_id: int = Field(..., description="The product key in the catalog.")
     quantity: int = Field(default=1, description="The quantity of units requested.")
     unit_price: Decimal = Field(..., description="The unit price offered/countered.")
@@ -69,6 +79,7 @@ class MerchantDecision(BaseModel):
     margin_check: str = Field(default="Margin check: PASSED", description="Detailed verification explanation showing margin guideline check.")
     cross_sell_product_id: Optional[int] = Field(default=None, description="Recommended bundle item ID if applicable")
     basket_items: Optional[List[BasketItemSchema]] = Field(default=None, description="The items inside the proposed bundle/basket.")
+    bundle_proposal: Optional[BundleProposalSchema] = Field(default=None, description="Structured bundle/cross-sell proposal data if proposing an optional bundle")
 
 
 class ProviderExecutionMetadata(BaseModel):
@@ -869,6 +880,7 @@ class MockProvider(LLMProvider):
             rationale = "Proposing cross-sell bundle (Earbuds + Charging Case) for a discounted price."
             message = "I can offer the Wireless Earbuds with a Premium Charging Case for ₹1,899 as a discounted bundle."
             margin_check = "Margin check: PASSED (calculated margin is 34.18% which exceeds min margin 20.00%)"
+            bundle_proposal = None
             basket_items = [
                 BasketItemSchema(product_id=1, name="Wireless Earbuds Pro", quantity=1, original_price=Decimal("1599.00"), negotiated_price=Decimal("1499.00"), is_primary=True),
                 BasketItemSchema(product_id=2, name="Premium Charging Case", quantity=1, original_price=Decimal("399.00"), negotiated_price=Decimal("400.00"), is_primary=False)
@@ -1031,6 +1043,18 @@ class MockProvider(LLMProvider):
                     rationale = "Countering standalone at ₹1,499 and proposing optional charging case bundle at ₹1,899."
                     message = "₹1,450 is below my target price. I can offer the earbuds alone for ₹1,499. Alternatively, since you have ₹2,000 available, I can include the Premium Charging Case for ₹1,899 as a value bundle (saving ₹99 compared to buying separately)."
                     margin_check = "Margin check: PASSED"
+                    bundle_proposal = BundleProposalSchema(
+                        proposal_id="prop_m_r2_bundle",
+                        is_optional=True,
+                        bundle_name="Wireless Earbuds Pro + Premium Charging Case",
+                        basket_items=[
+                            {"product_id": 1, "name": "Wireless Earbuds Pro", "quantity": 1, "original_price": Decimal("1599.00"), "negotiated_price": Decimal("1499.00"), "is_primary": True},
+                            {"product_id": 2, "name": "Premium Charging Case", "quantity": 1, "original_price": Decimal("399.00"), "negotiated_price": Decimal("400.00"), "is_primary": False}
+                        ],
+                        standalone_price=Decimal("1499.00"),
+                        bundle_price=Decimal("1899.00"),
+                        savings=Decimal("99.00")
+                    )
                     basket_items = [
                         BasketItemSchema(product_id=1, name="Wireless Earbuds Pro", quantity=1, original_price=Decimal("1599.00"), negotiated_price=Decimal("1499.00"), is_primary=True)
                     ]
@@ -1044,6 +1068,7 @@ class MockProvider(LLMProvider):
                 rationale=rationale,
                 message=message,
                 margin_check=margin_check,
+                bundle_proposal=bundle_proposal,
                 basket_items=basket_items
             )
 

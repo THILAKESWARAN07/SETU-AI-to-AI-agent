@@ -732,6 +732,35 @@ class NegotiationOrchestrator:
                 previous_merchant_price=last_merchant_standalone_price
             )
 
+            # Deterministic calculation of optional bundle opportunity if applicable
+            optional_bundle_dict = None
+            if sales_eval.get("bundle_info"):
+                b_info = sales_eval["bundle_info"]
+                pres = b_info.get("prescription", {})
+                b_items = pres.get("bundle_items", [])
+                catalog_lookup = {p.id: p for p in self.db.query(Product).all()}
+                bundle_fin = calculate_basket_financials(b_items, catalog_lookup=catalog_lookup)
+                
+                # Check inventory of all bundle items
+                all_stock_ok = all(
+                    (catalog_lookup[it["product_id"]].inventory >= it.get("quantity", 1) and catalog_lookup[it["product_id"]].active)
+                    for it in b_items if it.get("product_id") in catalog_lookup
+                )
+                
+                b_names = " + ".join([it["name"] for it in b_items])
+                optional_bundle_dict = {
+                    "bundle_product_ids": [it["product_id"] for it in b_items],
+                    "included_product_names": b_names,
+                    "bundle_name": b_names,
+                    "bundle_list_price": bundle_fin["catalog_total"],
+                    "bundle_min_price": str(pres.get("bundle_floor_price", bundle_fin["total_cost"])),
+                    "bundle_price": bundle_fin["basket_total"],
+                    "savings": bundle_fin["buyer_savings_amount"],
+                    "inventory_available": all_stock_ok,
+                    "fits_budget": Decimal(bundle_fin["basket_total"]) <= effective_max_budget,
+                    "basket_items": b_items
+                }
+
             merchant_prompt = (
                 f"=== CURRENT NEGOTIATION CONTEXT ===\n"
                 f"NEGOTIATION SESSION ID: {session_id}\n"
@@ -752,11 +781,18 @@ class NegotiationOrchestrator:
                 f"Margin Evaluation: {margin_eval}\n"
                 f"Recommended Merchant Strategy: {sales_eval['strategy']} ({sales_eval['reason']})\n"
                 f"Recommended Standalone Price: ₹{sales_eval['recommended_standalone_price']}\n"
-                f"You are negotiating a basket. Formulate your response (COUNTER, ACCEPT, or REJECT). "
-                f"If you choose to COUNTER, you can offer a profitable bundle containing the primary product "
-                f"plus one or more compatible accessories/complementary products (from its related_product_ids list). "
-                f"Ensure total_amount equals the exact sum of negotiated prices of all items in basket_items."
             )
+            if optional_bundle_dict:
+                merchant_prompt += (
+                    f"Optional Bundle Opportunity: {optional_bundle_dict['bundle_name']} for ₹{optional_bundle_dict['bundle_price']} (Customer saves ₹{optional_bundle_dict['savings']}).\n"
+                    f"You may counter the standalone price (COUNTER) and/or propose the optional bundle (PROPOSE_BUNDLE or BUNDLE). "
+                    f"The bundle is strictly optional and must never replace the buyer's original request without consent.\n"
+                )
+            else:
+                merchant_prompt += (
+                    f"Formulate your response (COUNTER, ACCEPT, or REJECT). "
+                    f"Ensure total_amount equals the exact sum of negotiated prices of all items in basket_items.\n"
+                )
 
             merchant_context = NegotiationContext(
                 agent_role="MERCHANT_AGENT",
@@ -783,7 +819,10 @@ class NegotiationOrchestrator:
                 max_allowed_discount=merchant_policy.get("max_discount_percent", Decimal("15.00")),
                 inventory_availability=inventory.get("inventory", 10),
                 relevant_policy_constraints=merchant_policy,
-                remaining_rounds=max(0, max_rounds - round_idx)
+                remaining_rounds=max(0, max_rounds - round_idx),
+                optional_bundle=optional_bundle_dict,
+                bundle_already_proposed=bool(merchant_bundle_proposal_record is not None),
+                standalone_preferred=budget_info.get("standalone_preferred", False)
             )
 
             try:
@@ -1095,8 +1134,27 @@ class NegotiationOrchestrator:
 
                 bundle_proposal_dict = None
                 serialized_bundle_items = None
-                if (is_bundle_counter or sales_eval.get("bundle_info") or len(merchant_decision.basket_items) > 1) and not is_hold:
-                    if is_bundle_counter or len(merchant_decision.basket_items) > 1:
+                has_bundle_opportunity = (
+                    is_bundle_counter or 
+                    sales_eval.get("bundle_info") is not None or 
+                    len(merchant_decision.basket_items) > 1 or 
+                    getattr(merchant_decision, "bundle_proposal", None) is not None or 
+                    optional_bundle_dict is not None
+                )
+                if has_bundle_opportunity and not is_hold:
+                    if getattr(merchant_decision, "bundle_proposal", None) and merchant_decision.bundle_proposal.basket_items:
+                        serialized_bundle_items = [
+                            {
+                                "product_id": item["product_id"] if isinstance(item, dict) else item.product_id,
+                                "name": item["name"] if isinstance(item, dict) else item.name,
+                                "quantity": item["quantity"] if isinstance(item, dict) else item.quantity,
+                                "original_price": str(item["original_price"] if isinstance(item, dict) else item.original_price),
+                                "negotiated_price": str(item["negotiated_price"] if isinstance(item, dict) else item.negotiated_price),
+                                "is_primary": item["is_primary"] if isinstance(item, dict) else item.is_primary
+                            }
+                            for item in merchant_decision.bundle_proposal.basket_items
+                        ]
+                    elif is_bundle_counter or len(merchant_decision.basket_items) > 1:
                         serialized_bundle_items = [
                             {
                                 "product_id": item.product_id,
@@ -1108,7 +1166,7 @@ class NegotiationOrchestrator:
                             }
                             for item in merchant_decision.basket_items
                         ]
-                    else:
+                    elif sales_eval.get("bundle_info"):
                         prescription = sales_eval["bundle_info"]["prescription"]
                         serialized_bundle_items = [
                             {
@@ -1121,32 +1179,46 @@ class NegotiationOrchestrator:
                             }
                             for item in prescription["bundle_items"]
                         ]
+                    elif optional_bundle_dict and optional_bundle_dict.get("bundle_items"):
+                        serialized_bundle_items = [
+                            {
+                                "product_id": item["product_id"],
+                                "name": item["name"],
+                                "quantity": item["quantity"],
+                                "original_price": str(item["original_price"]),
+                                "negotiated_price": str(item["negotiated_price"]),
+                                "is_primary": item["is_primary"]
+                            }
+                            for item in optional_bundle_dict["bundle_items"]
+                        ]
                     
-                    catalog_lookup = {p.id: p for p in self.db.query(Product).all()}
-                    bundle_fin = calculate_basket_financials(serialized_bundle_items, catalog_lookup=catalog_lookup)
-                    prop_bundle_id = f"prop_m_r{round_idx}_bundle"
-                    last_merchant_bundle_id = prop_bundle_id
-                    bundle_proposal_dict = {
-                        "proposal_id": prop_bundle_id,
-                        "actor": "merchant",
-                        "proposal_type": "BUNDLE_PROPOSAL",
-                        "parent_proposal_id": "prop_b_r1",
-                        "round": round_idx,
-                        "original_amount": bundle_fin["catalog_total"],
-                        "offered_amount": bundle_fin["basket_total"],
-                        "total_amount": bundle_fin["basket_total"],
-                        "savings": bundle_fin["buyer_savings_amount"],
-                        "basket_items": serialized_bundle_items,
-                        "is_optional_bundle": True,
-                        "status": "OPEN",
-                        "strategy": "BUNDLE"
-                    }
-                    proposals.append(bundle_proposal_dict)
-                    merchant_bundle_proposal_record = bundle_proposal_dict
-                    
-                    bundle_comp_names = " + ".join([it["name"] for it in serialized_bundle_items]) if serialized_bundle_items else "Accessories"
-                    primary_name = prod_details["name"] if prod_details else "Product"
-                    merchant_msg = f"I can offer the standalone {primary_name} for ₹{standalone_counter_price}, or a cross-sell bundle ({bundle_comp_names}) for ₹{bundle_fin['basket_total']} (save ₹{bundle_fin['buyer_savings_amount']})."
+                    if serialized_bundle_items and len(serialized_bundle_items) > 1:
+                        catalog_lookup = {p.id: p for p in self.db.query(Product).all()}
+                        bundle_fin = calculate_basket_financials(serialized_bundle_items, catalog_lookup=catalog_lookup)
+                        prop_bundle_id = f"prop_m_r{round_idx}_bundle"
+                        last_merchant_bundle_id = prop_bundle_id
+                        bundle_proposal_dict = {
+                            "proposal_id": prop_bundle_id,
+                            "actor": "merchant",
+                            "proposal_type": "BUNDLE_PROPOSAL",
+                            "parent_proposal_id": "prop_b_r1",
+                            "round": round_idx,
+                            "original_amount": bundle_fin["catalog_total"],
+                            "offered_amount": bundle_fin["basket_total"],
+                            "total_amount": bundle_fin["basket_total"],
+                            "savings": bundle_fin["buyer_savings_amount"],
+                            "basket_items": serialized_bundle_items,
+                            "is_optional_bundle": True,
+                            "status": "OPEN",
+                            "strategy": "BUNDLE"
+                        }
+                        proposals.append(bundle_proposal_dict)
+                        merchant_bundle_proposal_record = bundle_proposal_dict
+                        
+                        bundle_comp_names = " + ".join([it["name"] for it in serialized_bundle_items]) if serialized_bundle_items else "Accessories"
+                        primary_name = prod_details["name"] if prod_details else "Product"
+                        if not getattr(merchant_decision, "message", None) or "bundle" not in merchant_decision.message.lower():
+                            merchant_msg = f"I can offer the standalone {primary_name} for ₹{standalone_counter_price}, or an optional value bundle ({bundle_comp_names}) for ₹{bundle_fin['basket_total']} (save ₹{bundle_fin['buyer_savings_amount']})."
 
                 active_proposals_list = [p for p in proposals if p.get("round") == round_idx and p.get("actor") == "merchant"]
                 primary_offer_amt = merchant_decision.total_amount if is_bundle_counter else standalone_counter_price
@@ -1251,8 +1323,33 @@ class NegotiationOrchestrator:
                     f"Formulate your response (COUNTER, ACCEPT, or REJECT)."
                 )
 
+                buyer_context = NegotiationContext(
+                    agent_role="BUYER_AGENT",
+                    current_round=round_idx,
+                    buyer_max_budget=effective_max_budget,
+                    current_product=prod_details,
+                    catalog_price=Decimal(str(prod_details.get("price", "1000.00"))),
+                    merchant_min_price=floor_price,
+                    current_proposal={
+                        "product_id": selected_product_id,
+                        "standalone_price": str(standalone_counter_price),
+                        "total_amount": str(standalone_counter_price),
+                        "options_summary": f"Option 1: Standalone for INR {standalone_counter_price}" + (f", Option 2: Optional Bundle for INR {bundle_proposal_dict['offered_amount']} (Savings: INR {bundle_proposal_dict['savings']})" if bundle_proposal_dict else ""),
+                        "bundle_proposal": bundle_proposal_dict
+                    },
+                    previous_offers=[{"round": p.get("round", 1), "actor": p.get("actor"), "total_amount": p.get("total_amount")} for p in proposals],
+                    max_allowed_discount=max_disc,
+                    inventory_availability=prod_details.get("inventory", 10),
+                    relevant_policy_constraints=policy_info,
+                    remaining_rounds=max(0, max_rounds - round_idx),
+                    optional_bundle=optional_bundle_dict,
+                    bundle_already_proposed=bool(bundle_proposal_dict is not None),
+                    standalone_preferred=budget_info.get("standalone_preferred", True),
+                    buyer_profile=budget_info.get("buyer_profile", "PRICE_FIRST")
+                )
+
                 try:
-                    buyer_decision = self.buyer.negotiate_decision(self.db, buyer_eval_prompt, memory=memory)
+                    buyer_decision = self.buyer.negotiate_decision(self.db, buyer_eval_prompt, memory=memory, context=buyer_context)
                     current_buyer_meta = getattr(buyer_decision, "provider_metadata", None) or getattr(self.buyer, "last_execution_metadata", None) or getattr(self.buyer.provider, "last_execution_metadata", None)
                     if current_buyer_meta:
                         provider_call_records.append(current_buyer_meta)
@@ -1732,6 +1829,8 @@ class NegotiationOrchestrator:
                 "margin_percent": str(margin_percent),
                 "policy_version": policy_version,
                 "basket": basket_dict,
+                "basket_type": "BUNDLE" if len(basket_dict["items"]) > 1 else "STANDALONE",
+                "selected_basket_type": "BUNDLE" if len(basket_dict["items"]) > 1 else "STANDALONE",
                 "financials": financials,
                 
                 # Structured Proposal and Offer Lifecycle

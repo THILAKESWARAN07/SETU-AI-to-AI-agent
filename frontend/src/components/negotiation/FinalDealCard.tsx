@@ -55,8 +55,8 @@ export default function FinalDealCard({
                 </div>
                 {itemDisc > 0 && (
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-success)', marginTop: '2px' }}>
-                    <span>Original: ₹{itemOrig.toLocaleString('en-IN')}</span>
-                    <span>Saved: -₹{itemDisc.toLocaleString('en-IN')}</span>
+                    <span>List Price: ₹{itemOrig.toLocaleString('en-IN')}</span>
+                    <span>You Save: ₹{itemDisc.toLocaleString('en-IN')} ({((itemDisc / itemOrig) * 100).toFixed(2)}%)</span>
                   </div>
                 )}
               </div>
@@ -72,7 +72,7 @@ export default function FinalDealCard({
         </div>
         <div className="deal-price-row">
           <span className="price-desc font-green">AI Negotiated Discount:</span>
-          <span className="price-val font-green">- ₹{discountVal.toLocaleString('en-IN')} ({parseFloat(discountPercent).toFixed(2)}%)</span>
+          <span className="price-val font-green">₹{Math.abs(discountVal).toLocaleString('en-IN')} ({parseFloat(discountPercent).toFixed(2)}%)</span>
         </div>
         <div className="deal-price-divider" />
         <div className="deal-price-row final-row">

@@ -524,12 +524,36 @@ export default function Negotiation() {
               <span className={`price-step-val ${isDealApproved ? 'highlight-green' : isDealBlocked ? 'highlight-red' : ''}`}>
                 {isDealApproved && liveFinalPrice ? `₹${liveFinalPrice.toLocaleString('en-IN')}` : isDealRequiresApproval && liveFinalPrice ? `₹${liveFinalPrice.toLocaleString('en-IN')} (Pending)` : isDealBlocked ? 'BLOCKED' : 'Pending...'}
               </span>
+              {isDealApproved && liveFinalPrice && (() => {
+                const basePrice = result?.basket?.original_total ? parseFloat(result.basket.original_total) : (liveCatalogPrice > 0 ? liveCatalogPrice : 0);
+                const totalSavings = basePrice > liveFinalPrice ? basePrice - liveFinalPrice : 0;
+                const totalDiscountPct = basePrice > 0 ? (totalSavings / basePrice) * 100 : 0;
+                return totalSavings > 0 ? (
+                  <span style={{ fontSize: '0.70rem', color: '#10b981', fontWeight: 600, marginTop: '2px', display: 'block' }}>
+                    Saved ₹{totalSavings.toLocaleString('en-IN')} · {totalDiscountPct.toFixed(2)}%
+                  </span>
+                ) : null;
+              })()}
               {liveFinalBasketDesc && (
                 <span style={{ fontSize: '0.68rem', color: 'var(--text-dimmed)', marginTop: '2px', display: 'block', maxWidth: '140px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={liveFinalBasketDesc}>
                   {liveFinalBasketDesc}
                 </span>
               )}
             </div>
+            {isDealApproved && (
+              <>
+                <ArrowRight className="price-step-arrow" />
+                <div className="price-step-item">
+                  <span className="price-step-label">Agreed Basket</span>
+                  <span className="price-step-val" style={{ 
+                    color: (result?.basket?.items?.length > 1 || (result?.selected_basket_type === 'BUNDLE') || (result?.basket_type === 'BUNDLE') || liveFinalBasketDesc?.includes('+')) ? '#a78bfa' : '#60a5fa',
+                    fontSize: '0.85rem'
+                  }}>
+                    {(result?.basket?.items?.length > 1 || (result?.selected_basket_type === 'BUNDLE') || (result?.basket_type === 'BUNDLE') || liveFinalBasketDesc?.includes('+')) ? 'BUNDLE' : 'STANDALONE'}
+                  </span>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Primary View: Chat Conversation Stream */}
@@ -765,7 +789,7 @@ export default function Negotiation() {
                                 </span>
                               </div>
                               <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#fbbf24', fontFamily: 'var(--font-mono)' }}>
-                                ₹{parseFloat(msg.standaloneCounter || msg.amount || '0').toLocaleString('en-IN')}
+                                ₹{parseFloat(msg.bundleProposal?.standalone_price || msg.standaloneCounter || msg.amount || '0').toLocaleString('en-IN')}
                               </span>
                             </div>
                             <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', display: 'block', marginTop: '2px' }}>
@@ -784,11 +808,11 @@ export default function Negotiation() {
                                   </span>
                                 </div>
                                 <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#a78bfa', fontFamily: 'var(--font-mono)' }}>
-                                  ₹{parseFloat(msg.bundleProposal.offered_amount || '0').toLocaleString('en-IN')}
+                                  ₹{parseFloat(msg.bundleProposal.bundle_price || msg.bundleProposal.offered_amount || '0').toLocaleString('en-IN')}
                                 </span>
                               </div>
                               <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                                {msg.bundleProposal.basket_items ? msg.bundleProposal.basket_items.map((i: any) => i.name).join(' + ') : 'Primary + Accessory'}
+                                {msg.bundleProposal.bundle_name || (msg.bundleProposal.basket_items ? msg.bundleProposal.basket_items.map((i: any) => i.name).join(' + ') : 'Primary + Accessory')}
                                 {msg.bundleProposal.savings && parseFloat(msg.bundleProposal.savings) > 0 && (
                                   <span style={{ color: '#10b981', marginLeft: '6px', fontWeight: 600 }}>
                                     (Save ₹{parseFloat(msg.bundleProposal.savings).toLocaleString('en-IN')})
@@ -1020,9 +1044,10 @@ export default function Negotiation() {
                   {result.basket.items.map((item: any, idx: number) => {
                     const itemOrig = parseFloat(item.original_price) * item.quantity;
                     const itemNeg = parseFloat(item.negotiated_price) * item.quantity;
-                    const itemDisc = itemOrig - itemNeg;
+                    const itemDisc = Math.max(0, itemOrig - itemNeg);
+                    const itemPct = itemOrig > 0 ? (itemDisc / itemOrig) * 100 : 0;
                     return (
-                      <div key={idx} style={{ display: 'flex', flexDirection: 'column', fontSize: '0.82rem' }}>
+                      <div key={idx} style={{ display: 'flex', flexDirection: 'column', fontSize: '0.82rem', gap: '3px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ color: 'var(--text-main)', fontWeight: 500 }}>
                             {item.name} {item.quantity > 1 ? `x${item.quantity}` : ''}
@@ -1036,10 +1061,20 @@ export default function Negotiation() {
                             ₹{itemNeg.toLocaleString('en-IN')}
                           </span>
                         </div>
-                        {itemDisc > 0 && (
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#34d399' }}>
-                            <span>List: ₹{itemOrig.toLocaleString('en-IN')}</span>
-                            <span>Save: -₹{itemDisc.toLocaleString('en-IN')}</span>
+                        {itemDisc > 0 ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '0.72rem', color: '#34d399', background: 'rgba(52, 211, 153, 0.06)', padding: '5px 8px', borderRadius: '4px', marginTop: '2px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span style={{ color: 'var(--text-dimmed)' }}>List Price: ₹{itemOrig.toLocaleString('en-IN')}</span>
+                              <span style={{ fontWeight: 600 }}>You Save: ₹{itemDisc.toLocaleString('en-IN')}</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#10b981' }}>
+                              <span>Discount: {itemPct.toFixed(2)}%</span>
+                              <span>₹{itemDisc.toLocaleString('en-IN')} ({itemPct.toFixed(2)}%)</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-dimmed)' }}>
+                            <span>List Price: ₹{itemOrig.toLocaleString('en-IN')}</span>
                           </div>
                         )}
                       </div>
@@ -1048,7 +1083,7 @@ export default function Negotiation() {
                   {parseFloat(result.basket.discount_amount || '0') > 0 && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#34d399', borderTop: '1px dashed rgba(255,255,255,0.08)', paddingTop: '6px', marginTop: '4px', fontWeight: 700 }}>
                       <span>Bundle Savings:</span>
-                      <span>-₹{parseFloat(result.basket.discount_amount).toLocaleString('en-IN')}</span>
+                      <span>₹{Math.abs(parseFloat(result.basket.discount_amount)).toLocaleString('en-IN')}</span>
                     </div>
                   )}
                 </div>
