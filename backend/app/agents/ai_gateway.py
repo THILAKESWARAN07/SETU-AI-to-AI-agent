@@ -1,7 +1,7 @@
 """
 SETU Central AI Gateway Architecture
 ====================================
-drastically reduces LLM API usage while maintaining genuine AI-to-AI negotiation.
+Drastically reduces LLM API usage while maintaining genuine AI-to-AI negotiation.
 
 Core Principles:
 1. Deterministic SETU tools (catalog search, policy evaluation, margin math, inventory checks,
@@ -12,17 +12,15 @@ Core Principles:
    B. Genuine Buyer Agent negotiation reasoning (1 structured turn per round).
    C. Genuine Merchant Agent negotiation reasoning (1 structured turn per round).
    D. Human-readable final explanation.
-3. Multi-Provider Support:
-   - Cerebras
-   - Groq
-   - Gemini
-   - NVIDIA NIM
-   - OpenRouter
-   - Ollama
-   - MockProvider (deterministic fallback)
+3. Multi-Provider Fallback Priority Chain:
+   Cerebras -> Groq -> Gemini -> NVIDIA NIM -> OpenRouter -> Ollama -> MockProvider
 4. Fast Circuit Breaker:
-   - On 429 (rate limit / quota), 401/403, 402, or repeated timeout, immediately opens circuit
-     for cooldown period (default 60s). Fails over with 0ms delay without blocking request threads.
+   - On 429 (rate limit / quota), 401/403 (auth), 402 (billing), 404 (model/endpoint not found),
+     503 (service unavailable), or repeated timeouts, immediately opens circuit for cooldown
+     (default 60s). Fails over with 0ms delay without blocking request threads or sleep loops.
+5. Absolute Safety:
+   - If ALL external providers fail, MockProvider GUARANTEES a 100% schema-compliant,
+     deterministic fallback decision. SETU NEVER crashes with an empty or malformed mock response.
 """
 
 import os
@@ -37,22 +35,56 @@ from pydantic import BaseModel, Field
 
 from backend.app.config import settings
 
+# Import canonical schemas from provider.py to prevent identity mismatch
+from backend.app.agents.provider import (
+    BuyerDecision,
+    MerchantDecision,
+    BasketItemSchema,
+    ProviderExecutionMetadata,
+    PurchaseRequestProposal,
+    MerchantOffer,
+)
+
 logger = logging.getLogger("setu.ai_gateway")
 
 
 # ==============================================================================
-# 1. CORE DATA SCHEMAS
+# 1. CORE DATA SCHEMAS & ERROR CONTRACT
 # ==============================================================================
 
-class ProviderExecutionMetadata(BaseModel):
-    provider_used: str = "mock"
-    provider_type: str = "deterministic_fallback"  # "real_llm" or "deterministic_fallback"
-    model_name: str = "mock-model-v2"
-    agent_role: Optional[str] = None
-    fallback_used: bool = False
-    fallback_depth: int = 0
-    fallback_reason: Optional[str] = None
-    response_latency_ms: float = 0.0
+class FailureCategory:
+    RATE_LIMITED = "RATE_LIMITED"
+    QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
+    AUTH_ERROR = "AUTH_ERROR"
+    BILLING_ERROR = "BILLING_ERROR"
+    MODEL_NOT_FOUND = "MODEL_NOT_FOUND"
+    ENDPOINT_ERROR = "ENDPOINT_ERROR"
+    TIMEOUT = "TIMEOUT"
+    SDK_ERROR = "SDK_ERROR"
+    UNAVAILABLE = "UNAVAILABLE"
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    UNKNOWN = "UNKNOWN"
+
+
+class ProviderFailure(Exception):
+    """
+    Standardized provider failure exception.
+    Provides structured error categorization without leaking secrets.
+    """
+    def __init__(
+        self,
+        provider_name: str,
+        category: str,
+        message: str,
+        status_code: Optional[int] = None,
+        model_name: Optional[str] = None
+    ):
+        self.provider_name = provider_name.lower().strip()
+        self.category = category
+        self.message = message
+        self.status_code = status_code
+        self.model_name = model_name
+        super().__init__(f"[{self.provider_name.upper()} | {self.category}] {self.message}")
 
 
 class UserIntent(BaseModel):
@@ -87,41 +119,6 @@ class NegotiationContext(BaseModel):
     remaining_rounds: int = Field(default=3, description="Remaining negotiation rounds")
 
 
-# Re-export decision models for backward compatibility and typing
-class BasketItemSchema(BaseModel):
-    product_id: int
-    name: str
-    quantity: int = 1
-    original_price: Decimal
-    negotiated_price: Decimal
-    is_primary: bool = True
-
-
-class BuyerDecision(BaseModel):
-    action: str = Field(..., description="OFFER, COUNTER, ACCEPT, or REJECT")
-    product_id: int = Field(..., description="Primary product ID being negotiated")
-    quantity: int = Field(default=1, description="Quantity")
-    unit_price: Decimal = Field(..., description="Proposed unit price for primary product")
-    total_amount: Decimal = Field(..., description="Total proposed price across all basket items")
-    rationale: str = Field(..., description="Explanation and negotiation strategy")
-    constraints_checked: List[str] = Field(default_factory=lambda: ["budget_fit", "catalog_price_bound"])
-    basket_items: Optional[List[BasketItemSchema]] = Field(default=None, description="List of items in the negotiated basket")
-    accept: Optional[bool] = Field(default=None, description="Explicit acceptance flag")
-
-
-class MerchantDecision(BaseModel):
-    action: str = Field(..., description="ACCEPT, COUNTER, BUNDLE, or REJECT")
-    product_id: int = Field(..., description="Primary product ID")
-    quantity: int = Field(default=1, description="Quantity")
-    unit_price: Decimal = Field(..., description="Offered unit price")
-    total_amount: Decimal = Field(..., description="Total proposed transaction amount")
-    rationale: str = Field(..., description="Reasoning, policy compliance, and margin justification")
-    margin_check: str = Field(default="Margin check: PASSED", description="Policy compliance summary")
-    cross_sell_product_id: Optional[int] = Field(default=None, description="Recommended bundle item ID if applicable")
-    basket_items: Optional[List[BasketItemSchema]] = Field(default=None, description="List of items in the negotiated basket")
-    accept: Optional[bool] = Field(default=None, description="Explicit acceptance flag")
-
-
 # ==============================================================================
 # 2. CIRCUIT BREAKER
 # ==============================================================================
@@ -129,8 +126,8 @@ class MerchantDecision(BaseModel):
 class CircuitBreaker:
     """
     In-memory thread-safe circuit breaker for external LLM providers.
-    Quickly trips to OPEN state on 429, quota limits, auth errors, payment required,
-    or repeated timeouts, preventing request delays on dead endpoints.
+    Quickly trips to OPEN state on 429, quota limits, auth errors, billing errors,
+    404 model not found, or repeated timeouts, preventing request delays on dead endpoints.
     """
     def __init__(self, cooldown_seconds: float = 60.0):
         self.cooldown_seconds = cooldown_seconds
@@ -144,6 +141,7 @@ class CircuitBreaker:
                 "failure_count": 0,
                 "circuit_open_until": 0.0,
                 "last_error": None,
+                "last_category": None,
                 "last_success_timestamp": None,
                 "total_calls": 0,
                 "failed_calls": 0
@@ -161,7 +159,7 @@ class CircuitBreaker:
 
             if state["circuit_state"] == "OPEN":
                 if now >= state["circuit_open_until"]:
-                    # Cooldown expired -> test transition to half-open
+                    # Cooldown expired -> test transition to half-open / closed
                     state["circuit_state"] = "CLOSED"
                     state["failure_count"] = 0
                     logger.info(f"CircuitBreaker: Cooldown elapsed for '{provider_name}'. Circuit closed (half-open test).")
@@ -178,21 +176,44 @@ class CircuitBreaker:
             state["circuit_state"] = "CLOSED"
             state["failure_count"] = 0
             state["last_error"] = None
+            state["last_category"] = None
             state["last_success_timestamp"] = time.time()
             state["total_calls"] += 1
 
-    def record_failure(self, provider_name: str, error: Exception, status_code: Optional[int] = None):
+    def record_failure(
+        self,
+        provider_name: str,
+        error: Exception,
+        status_code: Optional[int] = None,
+        category: Optional[str] = None
+    ):
         provider_name = provider_name.lower().strip()
         if provider_name == "mock":
             return
 
         err_str = str(error)
-        is_fast_trip = False
+        cat = category or (getattr(error, "category", None))
 
-        # Detect fast-trip conditions (429 rate limit, 401/403 invalid key, 402 payment, 503 unavailable, QuotaExceeded)
-        if status_code in (429, 401, 402, 403, 503):
+        is_fast_trip = False
+        if status_code in (401, 402, 403, 404, 429, 503):
             is_fast_trip = True
-        elif any(term in err_str.lower() for term in ("429", "rate limit", "resourceexhausted", "quota", "payment required", "402", "unauthorized", "503 unavailable")):
+        elif cat in (
+            FailureCategory.RATE_LIMITED,
+            FailureCategory.QUOTA_EXHAUSTED,
+            FailureCategory.AUTH_ERROR,
+            FailureCategory.BILLING_ERROR,
+            FailureCategory.MODEL_NOT_FOUND,
+            FailureCategory.ENDPOINT_ERROR,
+            FailureCategory.TIMEOUT,
+            FailureCategory.SDK_ERROR,
+            FailureCategory.UNAVAILABLE,
+        ):
+            is_fast_trip = True
+        elif any(term in err_str.lower() for term in (
+            "429", "rate limit", "resourceexhausted", "quota", "payment required",
+            "402", "unauthorized", "401", "forbidden", "403", "not found", "404",
+            "503 unavailable", "model_not_found", "importerror"
+        )):
             is_fast_trip = True
 
         with self._lock:
@@ -201,6 +222,7 @@ class CircuitBreaker:
             state["failure_count"] += 1
             state["total_calls"] += 1
             state["failed_calls"] += 1
+            state["last_category"] = cat or FailureCategory.UNKNOWN
             state["last_error"] = f"{type(error).__name__}: {err_str[:200]}"
 
             if is_fast_trip or state["failure_count"] >= 2:
@@ -208,7 +230,7 @@ class CircuitBreaker:
                 state["circuit_open_until"] = time.time() + self.cooldown_seconds
                 logger.warning(
                     f"CircuitBreaker: Tripped OPEN for provider '{provider_name}' "
-                    f"(status={status_code}, error={state['last_error']}). "
+                    f"(status={status_code}, category={state['last_category']}, error={state['last_error']}). "
                     f"Cooldown until {time.strftime('%H:%M:%S', time.localtime(state['circuit_open_until']))}."
                 )
 
@@ -223,6 +245,7 @@ class CircuitBreaker:
                     "circuit_state": "OPEN" if is_open else "CLOSED",
                     "failure_count": s["failure_count"],
                     "circuit_open_until": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(s["circuit_open_until"])) if is_open else None,
+                    "last_category": s.get("last_category"),
                     "last_error": s["last_error"],
                     "total_calls": s["total_calls"],
                     "failed_calls": s["failed_calls"]
@@ -235,8 +258,58 @@ circuit_breaker = CircuitBreaker(cooldown_seconds=getattr(settings, "CIRCUIT_BRE
 
 
 # ==============================================================================
-# 3. INTENT CACHE
+# 3. INTENT CACHE & DETERMINISTIC INTENT PARSER
 # ==============================================================================
+
+def parse_deterministic_intent(query: str, budget: Optional[Decimal] = None) -> Optional[UserIntent]:
+    """
+    Deterministically parses structured user purchase queries without invoking an LLM.
+    Returns UserIntent if high confidence pattern matches, otherwise None (fallback to LLM).
+    """
+    q_clean = query.strip()
+    if not q_clean:
+        return None
+
+    # Pattern: "I want <Product> [with budget [Rs/INR] <amount>]"
+    # Example: "I want Samsung Galaxy A15 with budget 14000 INR."
+    match = re.search(
+        r"(?:i\s+want|buy|looking\s+for|purchase|need)\s+([a-zA-Z0-9\s\+\-]+?)"
+        r"(?:\s+(?:with\s+budget|budget|under|for|max\s+price)\s+(?:rs\.?|inr|₹|\$)?\s*([\d,]+(?:\.\d+)?))?(?:\s*(?:inr|rs\.?|₹|\$))?[\.\!\?]?$",
+        q_clean,
+        re.IGNORECASE
+    )
+
+    if match:
+        prod_name = match.group(1).strip()
+        budget_str = match.group(2)
+        parsed_budget = None
+
+        if budget_str:
+            try:
+                parsed_budget = float(budget_str.replace(",", ""))
+            except Exception:
+                pass
+        elif budget is not None:
+            parsed_budget = float(budget)
+
+        # Sanity check product name
+        if len(prod_name) >= 3 and not any(w in prod_name.lower() for w in ["something", "anything", "whatever"]):
+            is_standalone = bool(re.search(r"standalone|without\s+accessories|only\s+phone|no\s+bundle", q_clean, re.IGNORECASE))
+            return UserIntent(
+                product=prod_name,
+                product_query=prod_name,
+                max_budget=parsed_budget,
+                currency="INR",
+                preferences=["standalone"] if is_standalone else [],
+                quantity=1,
+                standalone_only=is_standalone,
+                confidence=0.98,
+                intent_parse_mode="deterministic",
+                intent_llm_used=False
+            )
+
+    return None
+
 
 class IntentCache:
     """
@@ -253,7 +326,6 @@ class IntentCache:
     @staticmethod
     def normalize_key(query: str) -> str:
         q = query.lower().strip()
-        # Strip currency words and symbols
         q = re.sub(r"[₹$€£]|rs\.?|inr", "", q, flags=re.IGNORECASE)
         q = re.sub(r"[^\w\s\d]", "", q)
         q = re.sub(r"\s+", " ", q).strip()
@@ -275,7 +347,6 @@ class IntentCache:
         key = self.normalize_key(query)
         with self._lock:
             if len(self._cache) >= self.max_size:
-                # Remove oldest item
                 oldest_key = min(self._cache.keys(), key=lambda k: self._cache[k][1])
                 del self._cache[oldest_key]
             self._cache[key] = (intent, time.time())
@@ -284,100 +355,15 @@ class IntentCache:
 intent_cache = IntentCache()
 
 
-def parse_deterministic_intent(query: str, budget: Optional[Union[Decimal, float]] = None) -> Optional[UserIntent]:
-    """
-    Deterministically extracts structured purchase intent for standard procurement requests.
-    Returns UserIntent if confidence >= 0.85, eliminating unnecessary external LLM calls.
-    Returns None for ambiguous queries requiring LLM reasoning.
-    """
-    q_clean = query.strip()
-    if not q_clean:
-        return None
-    q_lower = q_clean.lower()
-
-    # Ambiguity check: if query has complex conjunctions or fuzzy desires, use LLM
-    ambiguity_markers = [
-        "not sure", "recommend me", "what is good for", "suggest something",
-        "long meetings", "gift for", "help me decide", "best for"
-    ]
-    if any(marker in q_lower for marker in ambiguity_markers):
-        return None
-
-    # 1. Extract budget
-    extracted_budget = None
-    if budget is not None:
-        try:
-            extracted_budget = float(budget)
-        except Exception:
-            pass
-    
-    if extracted_budget is None:
-        budget_match = re.search(r'(?:under|below|budget|around|max|within|₹|rs\.?|inr)\s*(\d+(?:,\d+)*(?:\.\d+)?)', q_lower)
-        if budget_match:
-            try:
-                extracted_budget = float(budget_match.group(1).replace(",", ""))
-            except Exception:
-                pass
-
-    # 2. Extract standalone preference
-    standalone_only = any(term in q_lower for term in ("standalone", "without accessories", "no accessories", "only the phone", "only the device", "just the"))
-
-    # 3. Detect target product / category
-    product_name = None
-    known_catalog = [
-        ("samsung galaxy a15", "Samsung Galaxy A15"),
-        ("samsung a15", "Samsung Galaxy A15"),
-        ("samsung galaxy", "Samsung Galaxy A15"),
-        ("redmi note 13", "Redmi Note 13"),
-        ("motorola g54", "Motorola G54"),
-        ("wireless earbuds", "Wireless Earbuds"),
-        ("earbuds pro", "Wireless Earbuds"),
-        ("earbuds", "Wireless Earbuds"),
-        ("earphone", "Wireless Earbuds"),
-        ("smartwatch", "Smartwatch"),
-        ("mechanical keyboard", "Mechanical Keyboard"),
-        ("gaming keyboard", "Mechanical Keyboard"),
-        ("keyboard", "Mechanical Keyboard"),
-        ("gaming mouse", "Gaming Mouse"),
-        ("wireless mouse", "Gaming Mouse"),
-        ("mouse", "Gaming Mouse"),
-        ("bluetooth speaker", "Bluetooth Speaker"),
-        ("speaker", "Bluetooth Speaker"),
-        ("smartphone", "Samsung Galaxy A15"),
-        ("mobile phone", "Samsung Galaxy A15"),
-        ("phone", "Samsung Galaxy A15")
-    ]
-    for pattern, name in known_catalog:
-        if pattern in q_lower:
-            product_name = name
-            break
-
-    if product_name:
-        return UserIntent(
-            product=product_name,
-            product_query=product_name,
-            max_budget=extracted_budget,
-            currency="INR",
-            preferences=["standalone"] if standalone_only else [],
-            quantity=1,
-            standalone_only=standalone_only,
-            confidence=0.95,
-            intent_parse_mode="deterministic",
-            intent_llm_used=False
-        )
-
-    return None
-
-
 # ==============================================================================
-# 4. MULTI-PROVIDER ADAPTERS
+# 4. PROVIDER ADAPTERS
 # ==============================================================================
 
 class BaseLLMProvider:
     provider_name: str = "base"
     provider_type: str = "real_llm"
     model_name: str = "base-model"
-    is_available: bool = True
+    is_available: bool = False
 
     def generate_structured(
         self,
@@ -388,14 +374,11 @@ class BaseLLMProvider:
     ) -> Tuple[BaseModel, ProviderExecutionMetadata]:
         raise NotImplementedError
 
-    def explain(self, decision: str, reasons: List[str], timeout: float = 15.0) -> str:
-        raise NotImplementedError
-
 
 class CerebrasProvider(BaseLLMProvider):
     """
-    Cerebras Cloud Ultra-Fast LLM Provider (Free / Free-tier API).
-    Standard OpenAI-compatible REST endpoint.
+    Cerebras Cloud Inference LLM Provider.
+    Ultra-fast Llama-3.1 inference tier.
     """
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.provider_name = "cerebras"
@@ -414,86 +397,7 @@ class CerebrasProvider(BaseLLMProvider):
     ) -> Tuple[BaseModel, ProviderExecutionMetadata]:
         import httpx
         if not self.is_available:
-            raise ValueError("Cerebras API key is not configured.")
-
-        start_t = time.perf_counter()
-        schema_json = json.dumps(schema.model_json_schema() if hasattr(schema, "model_json_schema") else schema.schema())
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key.strip()}",
-            "Content-Type": "application/json"
-        }
-
-        full_system = (
-            f"{system_prompt}\n\n"
-            f"IMPORTANT: You MUST respond ONLY with a valid JSON object strictly matching this schema:\n"
-            f"{schema_json}\n"
-            f"Do not include markdown codeblocks or extra text outside the JSON object."
-        )
-
-        payload = {
-            "model": self.model_name,
-            "messages": [
-                {"role": "system", "content": full_system},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.2,
-            "response_format": {"type": "json_object"}
-        }
-
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                res = client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
-                res.raise_for_status()
-                data = res.json()
-                raw_text = data["choices"][0]["message"]["content"].strip()
-                cleaned = re.sub(r"^```json\s*", "", raw_text, flags=re.IGNORECASE)
-                cleaned = re.sub(r"\s*```$", "", cleaned)
-                parsed_json = json.loads(cleaned)
-                parsed_obj = schema.model_validate(parsed_json) if hasattr(schema, "model_validate") else schema.parse_obj(parsed_json)
-
-                latency = (time.perf_counter() - start_t) * 1000.0
-                meta = ProviderExecutionMetadata(
-                    provider_used=self.provider_name,
-                    provider_type="real_llm",
-                    model_name=self.model_name,
-                    fallback_used=False,
-                    fallback_depth=0,
-                    response_latency_ms=round(latency, 2)
-                )
-                return parsed_obj, meta
-        except httpx.HTTPStatusError as e:
-            status = e.response.status_code if e.response else None
-            circuit_breaker.record_failure(self.provider_name, e, status_code=status)
-            raise e
-        except Exception as e:
-            circuit_breaker.record_failure(self.provider_name, e)
-            raise e
-
-
-class GroqProvider(BaseLLMProvider):
-    """
-    Groq Fast Inference LLM Provider.
-    OpenAI-compatible REST endpoint.
-    """
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.provider_name = "groq"
-        self.provider_type = "real_llm"
-        self.api_key = api_key or os.getenv("GROQ_API_KEY") or getattr(settings, "GROQ_API_KEY", "")
-        self.model_name = model or os.getenv("GROQ_MODEL") or getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile")
-        self.base_url = "https://api.groq.com/openai/v1"
-        self.is_available = bool(self.api_key and self.api_key.strip())
-
-    def generate_structured(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        schema: Type[BaseModel],
-        timeout: float = 20.0
-    ) -> Tuple[BaseModel, ProviderExecutionMetadata]:
-        import httpx
-        if not self.is_available:
-            raise ValueError("Groq API key is not configured.")
+            raise ProviderFailure(self.provider_name, FailureCategory.AUTH_ERROR, "Cerebras API key is not configured.")
 
         start_t = time.perf_counter()
         schema_json = json.dumps(schema.model_json_schema() if hasattr(schema, "model_json_schema") else schema.schema())
@@ -520,9 +424,10 @@ class GroqProvider(BaseLLMProvider):
             "response_format": {"type": "json_object"}
         }
 
+        url = f"{self.base_url.rstrip('/')}/chat/completions"
         try:
             with httpx.Client(timeout=timeout) as client:
-                res = client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+                res = client.post(url, json=payload, headers=headers)
                 res.raise_for_status()
                 data = res.json()
                 raw_text = data["choices"][0]["message"]["content"].strip()
@@ -543,23 +448,37 @@ class GroqProvider(BaseLLMProvider):
                 return parsed_obj, meta
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response else None
-            circuit_breaker.record_failure(self.provider_name, e, status_code=status)
-            raise e
+            cat = FailureCategory.RATE_LIMITED if status == 429 else (
+                FailureCategory.AUTH_ERROR if status in (401, 403) else (
+                    FailureCategory.MODEL_NOT_FOUND if status == 404 else FailureCategory.ENDPOINT_ERROR
+                )
+            )
+            failure = ProviderFailure(self.provider_name, cat, f"HTTP {status}: {e.response.text[:150] if e.response else str(e)}", status_code=status, model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure, status_code=status, category=cat)
+            raise failure
+        except httpx.TimeoutException as e:
+            failure = ProviderFailure(self.provider_name, FailureCategory.TIMEOUT, f"Request timed out after {timeout}s: {e}", model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure, category=FailureCategory.TIMEOUT)
+            raise failure
         except Exception as e:
-            circuit_breaker.record_failure(self.provider_name, e)
-            raise e
+            failure = ProviderFailure(self.provider_name, FailureCategory.UNKNOWN, f"Cerebras call failed: {str(e)[:150]}", model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure)
+            raise failure
 
 
-class GeminiProvider(BaseLLMProvider):
+class GroqProvider(BaseLLMProvider):
     """
-    Google Gemini LLM Provider (Flash / Flash-Lite free tier).
-    Supports google-genai and google.generativeai SDKs.
+    Groq Fast Inference LLM Provider.
+    OpenAI-compatible REST endpoint.
     """
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.provider_name = "gemini"
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, base_url: Optional[str] = None):
+        self.provider_name = "groq"
         self.provider_type = "real_llm"
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or getattr(settings, "GEMINI_API_KEY", "")
-        self.model_name = model or os.getenv("GEMINI_MODEL") or getattr(settings, "LLM_MODEL", "gemini-3.1-flash-lite")
+        self.api_key = api_key or os.getenv("GROQ_API_KEY") or getattr(settings, "GROQ_API_KEY", "")
+        self.model_name = model or os.getenv("GROQ_MODEL") or os.getenv("MERCHANT_LLM_MODEL") or getattr(settings, "GROQ_MODEL", "groq/compound-mini")
+        
+        raw_url = base_url or os.getenv("GROQ_BASE_URL") or "https://api.groq.com/openai/v1"
+        self.base_url = raw_url.rstrip("/")
         self.is_available = bool(self.api_key and self.api_key.strip())
 
     def generate_structured(
@@ -569,32 +488,168 @@ class GeminiProvider(BaseLLMProvider):
         schema: Type[BaseModel],
         timeout: float = 20.0
     ) -> Tuple[BaseModel, ProviderExecutionMetadata]:
+        import httpx
         if not self.is_available:
-            raise ValueError("Gemini API key is not configured.")
+            raise ProviderFailure(self.provider_name, FailureCategory.AUTH_ERROR, "Groq API key is not configured.")
+
+        start_t = time.perf_counter()
+        schema_json = json.dumps(schema.model_json_schema() if hasattr(schema, "model_json_schema") else schema.schema())
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key.strip()}",
+            "Content-Type": "application/json"
+        }
+
+        full_system = (
+            f"{system_prompt}\n\n"
+            f"IMPORTANT: You MUST respond ONLY with a valid JSON object strictly matching this schema:\n"
+            f"{schema_json}\n"
+            f"Do not include markdown fences or any conversational preamble."
+        )
+
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": full_system},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"}
+        }
+
+        url = f"{self.base_url}/chat/completions"
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                res = client.post(url, json=payload, headers=headers)
+                res.raise_for_status()
+                data = res.json()
+                raw_text = data["choices"][0]["message"]["content"].strip()
+                cleaned = re.sub(r"^```json\s*", "", raw_text, flags=re.IGNORECASE)
+                cleaned = re.sub(r"\s*```$", "", cleaned)
+                parsed_json = json.loads(cleaned)
+                parsed_obj = schema.model_validate(parsed_json) if hasattr(schema, "model_validate") else schema.parse_obj(parsed_json)
+
+                latency = (time.perf_counter() - start_t) * 1000.0
+                meta = ProviderExecutionMetadata(
+                    provider_used=self.provider_name,
+                    provider_type="real_llm",
+                    model_name=self.model_name,
+                    fallback_used=False,
+                    fallback_depth=0,
+                    response_latency_ms=round(latency, 2)
+                )
+                return parsed_obj, meta
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code if e.response else None
+            cat = FailureCategory.RATE_LIMITED if status == 429 else (
+                FailureCategory.AUTH_ERROR if status in (401, 403) else (
+                    FailureCategory.MODEL_NOT_FOUND if status == 404 else FailureCategory.ENDPOINT_ERROR
+                )
+            )
+            msg = f"Groq HTTP {status} error: {e.response.text[:150] if e.response else str(e)}"
+            failure = ProviderFailure(self.provider_name, cat, msg, status_code=status, model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure, status_code=status, category=cat)
+            raise failure
+        except httpx.TimeoutException as e:
+            failure = ProviderFailure(self.provider_name, FailureCategory.TIMEOUT, f"Groq request timed out after {timeout}s: {e}", model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure, category=FailureCategory.TIMEOUT)
+            raise failure
+        except Exception as e:
+            failure = ProviderFailure(self.provider_name, FailureCategory.UNKNOWN, f"Groq execution failure: {str(e)[:150]}", model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure)
+            raise failure
+
+
+class GeminiProvider(BaseLLMProvider):
+    """
+    Google Gemini LLM Provider.
+    Supports both modern google-genai and legacy google-generativeai SDKs gracefully.
+    """
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        self.provider_name = "gemini"
+        self.provider_type = "real_llm"
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or getattr(settings, "GEMINI_API_KEY", "")
+        self.model_name = model or os.getenv("GEMINI_MODEL") or getattr(settings, "LLM_MODEL", "gemini-3.5-flash")
+        self.is_available = self._check_operational_availability()
+
+    @staticmethod
+    def get_sdk_status() -> Tuple[Optional[str], Optional[Any], Optional[Any]]:
+        """
+        Safely checks which Gemini SDK is installed in the current environment.
+        Returns (sdk_type, sdk_module, types_module)
+        """
+        # 1. Try modern google-genai
+        try:
+            from google import genai
+            from google.genai import types
+            return ("google.genai", genai, types)
+        except Exception:
+            pass
+
+        # 2. Try legacy google-generativeai
+        try:
+            import google.generativeai as legacy_genai
+            return ("google.generativeai", legacy_genai, None)
+        except Exception:
+            pass
+
+        return (None, None, None)
+
+    def _check_operational_availability(self) -> bool:
+        has_key = bool(self.api_key and self.api_key.strip())
+        sdk_type, _, _ = self.get_sdk_status()
+        return has_key and (sdk_type is not None)
+
+    def generate_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        schema: Type[BaseModel],
+        timeout: float = 20.0
+    ) -> Tuple[BaseModel, ProviderExecutionMetadata]:
+        if not self.api_key or not self.api_key.strip():
+            raise ProviderFailure(self.provider_name, FailureCategory.AUTH_ERROR, "Gemini API key is not configured.")
+
+        sdk_type, sdk_module, types_module = self.get_sdk_status()
+        if sdk_type is None:
+            failure = ProviderFailure(self.provider_name, FailureCategory.SDK_ERROR, "Neither 'google-genai' nor 'google-generativeai' is installed.")
+            circuit_breaker.record_failure(self.provider_name, failure, category=FailureCategory.SDK_ERROR)
+            raise failure
 
         start_t = time.perf_counter()
         schema_json = json.dumps(schema.model_json_schema() if hasattr(schema, "model_json_schema") else schema.schema())
 
         try:
-            # Try official modern google.genai Client first
-            from google import genai
-            from google.genai import types
+            if sdk_type == "google.genai":
+                client = sdk_module.Client(api_key=self.api_key.strip())
+                prompt_content = f"{user_prompt}\n\nReturn JSON matching schema:\n{schema_json}"
+                config = types_module.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    response_mime_type="application/json",
+                    response_schema=schema,
+                    temperature=0.2
+                )
+                response = client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt_content,
+                    config=config
+                )
+                raw_text = response.text.strip()
+            else:
+                # Legacy google.generativeai
+                sdk_module.configure(api_key=self.api_key.strip())
+                model = sdk_module.GenerativeModel(
+                    model_name=self.model_name,
+                    system_instruction=system_prompt,
+                    generation_config={"response_mime_type": "application/json", "temperature": 0.2}
+                )
+                prompt_content = f"{user_prompt}\n\nStrictly return JSON matching:\n{schema_json}"
+                response = model.generate_content(prompt_content)
+                raw_text = response.text.strip()
 
-            client = genai.Client(api_key=self.api_key.strip())
-            prompt_content = f"{user_prompt}\n\nReturn JSON matching schema:\n{schema_json}"
-            config = types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                response_mime_type="application/json",
-                response_schema=schema,
-                temperature=0.2
-            )
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=prompt_content,
-                config=config
-            )
-            raw_text = response.text.strip()
-            parsed_json = json.loads(raw_text)
+            cleaned = re.sub(r"^```json\s*", "", raw_text, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+            parsed_json = json.loads(cleaned)
             parsed_obj = schema.model_validate(parsed_json) if hasattr(schema, "model_validate") else schema.parse_obj(parsed_json)
 
             latency = (time.perf_counter() - start_t) * 1000.0
@@ -608,11 +663,25 @@ class GeminiProvider(BaseLLMProvider):
             )
             return parsed_obj, meta
         except Exception as e:
-            # Check for 429 / quota
-            err_str = str(e).lower()
-            status_code = 429 if ("429" in err_str or "resourceexhausted" in err_str or "quota" in err_str) else None
-            circuit_breaker.record_failure(self.provider_name, e, status_code=status_code)
-            raise e
+            err_str = str(e)
+            cat = FailureCategory.UNKNOWN
+            status_code = None
+            if any(w in err_str.lower() for w in ["429", "resourceexhausted", "quota"]):
+                cat = FailureCategory.QUOTA_EXHAUSTED
+                status_code = 429
+            elif any(w in err_str.lower() for w in ["503", "unavailable"]):
+                cat = FailureCategory.UNAVAILABLE
+                status_code = 503
+            elif any(w in err_str.lower() for w in ["401", "403", "api_key_invalid", "permissiondenied"]):
+                cat = FailureCategory.AUTH_ERROR
+                status_code = 403
+            elif any(w in err_str.lower() for w in ["404", "not_found", "model not found"]):
+                cat = FailureCategory.MODEL_NOT_FOUND
+                status_code = 404
+
+            failure = ProviderFailure(self.provider_name, cat, f"Gemini API failure: {err_str[:150]}", status_code=status_code, model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure, status_code=status_code, category=cat)
+            raise failure
 
 
 class NvidiaNimProvider(BaseLLMProvider):
@@ -637,7 +706,7 @@ class NvidiaNimProvider(BaseLLMProvider):
     ) -> Tuple[BaseModel, ProviderExecutionMetadata]:
         import httpx
         if not self.is_available:
-            raise ValueError("NVIDIA NIM API key is not configured.")
+            raise ProviderFailure(self.provider_name, FailureCategory.AUTH_ERROR, "NVIDIA NIM API key is not configured.")
 
         start_t = time.perf_counter()
         schema_json = json.dumps(schema.model_json_schema() if hasattr(schema, "model_json_schema") else schema.schema())
@@ -651,7 +720,7 @@ class NvidiaNimProvider(BaseLLMProvider):
             f"{system_prompt}\n\n"
             f"IMPORTANT: You MUST respond ONLY with a valid JSON object strictly matching this schema:\n"
             f"{schema_json}\n"
-            f"Do not include markdown codeblocks or extra text."
+            f"Do not include markdown fences or any conversational preamble."
         )
 
         payload = {
@@ -664,9 +733,10 @@ class NvidiaNimProvider(BaseLLMProvider):
             "response_format": {"type": "json_object"}
         }
 
+        url = f"{self.base_url.rstrip('/')}/chat/completions"
         try:
             with httpx.Client(timeout=timeout) as client:
-                res = client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+                res = client.post(url, json=payload, headers=headers)
                 res.raise_for_status()
                 data = res.json()
                 raw_text = data["choices"][0]["message"]["content"].strip()
@@ -687,24 +757,36 @@ class NvidiaNimProvider(BaseLLMProvider):
                 return parsed_obj, meta
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response else None
-            circuit_breaker.record_failure(self.provider_name, e, status_code=status)
-            raise e
+            cat = FailureCategory.RATE_LIMITED if status == 429 else (
+                FailureCategory.AUTH_ERROR if status in (401, 403) else (
+                    FailureCategory.MODEL_NOT_FOUND if status == 404 else FailureCategory.ENDPOINT_ERROR
+                )
+            )
+            failure = ProviderFailure(self.provider_name, cat, f"NVIDIA NIM HTTP {status}: {e.response.text[:150] if e.response else str(e)}", status_code=status, model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure, status_code=status, category=cat)
+            raise failure
+        except httpx.TimeoutException as e:
+            failure = ProviderFailure(self.provider_name, FailureCategory.TIMEOUT, f"NVIDIA NIM request timed out after {timeout}s: {e}", model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure, category=FailureCategory.TIMEOUT)
+            raise failure
         except Exception as e:
-            circuit_breaker.record_failure(self.provider_name, e)
-            raise e
+            failure = ProviderFailure(self.provider_name, FailureCategory.UNKNOWN, f"NVIDIA NIM failure: {str(e)[:150]}", model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure)
+            raise failure
 
 
 class OpenRouterProvider(BaseLLMProvider):
     """
-    OpenRouter Multi-Model Gateway (Free / Free-tier Models).
-    OpenAI-compatible REST endpoint.
+    OpenRouter API Provider (Free models and universal aggregator).
+    OpenAI-compatible REST endpoint with required OpenRouter metadata headers.
     """
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, base_url: Optional[str] = None):
         self.provider_name = "openrouter"
         self.provider_type = "real_llm"
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY") or getattr(settings, "OPENROUTER_API_KEY", "")
-        self.model_name = model or os.getenv("OPENROUTER_MODEL") or getattr(settings, "OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
-        self.base_url = "https://openrouter.ai/api/v1"
+        self.model_name = model or os.getenv("OPENROUTER_MODEL") or getattr(settings, "OPENROUTER_MODEL", "dots-studio/dots-3-note-preview:free")
+        raw_url = base_url or os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+        self.base_url = raw_url.rstrip("/")
         self.is_available = bool(self.api_key and self.api_key.strip())
 
     def generate_structured(
@@ -716,23 +798,23 @@ class OpenRouterProvider(BaseLLMProvider):
     ) -> Tuple[BaseModel, ProviderExecutionMetadata]:
         import httpx
         if not self.is_available:
-            raise ValueError("OpenRouter API key is not configured.")
+            raise ProviderFailure(self.provider_name, FailureCategory.AUTH_ERROR, "OpenRouter API key is not configured.")
 
         start_t = time.perf_counter()
         schema_json = json.dumps(schema.model_json_schema() if hasattr(schema, "model_json_schema") else schema.schema())
 
         headers = {
             "Authorization": f"Bearer {self.api_key.strip()}",
-            "HTTP-Referer": "https://setu-ai-to-ai-agent.vercel.app",
-            "X-Title": "SETU AI-to-AI Agent",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://setu.ai",
+            "X-Title": "SETU AI Commerce Trust Layer"
         }
 
         full_system = (
             f"{system_prompt}\n\n"
             f"IMPORTANT: You MUST respond ONLY with a valid JSON object strictly matching this schema:\n"
             f"{schema_json}\n"
-            f"Do not include markdown codeblocks or extra text."
+            f"Do not include markdown fences or any conversational preamble."
         )
 
         payload = {
@@ -745,9 +827,10 @@ class OpenRouterProvider(BaseLLMProvider):
             "response_format": {"type": "json_object"}
         }
 
+        url = f"{self.base_url}/chat/completions"
         try:
             with httpx.Client(timeout=timeout) as client:
-                res = client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+                res = client.post(url, json=payload, headers=headers)
                 res.raise_for_status()
                 data = res.json()
                 raw_text = data["choices"][0]["message"]["content"].strip()
@@ -768,11 +851,25 @@ class OpenRouterProvider(BaseLLMProvider):
                 return parsed_obj, meta
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response else None
-            circuit_breaker.record_failure(self.provider_name, e, status_code=status)
-            raise e
+            cat = FailureCategory.RATE_LIMITED if status == 429 else (
+                FailureCategory.BILLING_ERROR if status == 402 else (
+                    FailureCategory.AUTH_ERROR if status in (401, 403) else (
+                        FailureCategory.MODEL_NOT_FOUND if status == 404 else FailureCategory.ENDPOINT_ERROR
+                    )
+                )
+            )
+            msg = f"OpenRouter HTTP {status}: {e.response.text[:150] if e.response else str(e)}"
+            failure = ProviderFailure(self.provider_name, cat, msg, status_code=status, model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure, status_code=status, category=cat)
+            raise failure
+        except httpx.TimeoutException as e:
+            failure = ProviderFailure(self.provider_name, FailureCategory.TIMEOUT, f"OpenRouter request timed out after {timeout}s: {e}", model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure, category=FailureCategory.TIMEOUT)
+            raise failure
         except Exception as e:
-            circuit_breaker.record_failure(self.provider_name, e)
-            raise e
+            failure = ProviderFailure(self.provider_name, FailureCategory.UNKNOWN, f"OpenRouter failure: {str(e)[:150]}", model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure)
+            raise failure
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -788,21 +885,9 @@ class OllamaProvider(BaseLLMProvider):
             os.getenv("OLLAMA_ENABLED", "false").lower() in ("true", "1", "yes") or
             getattr(settings, "OLLAMA_ENABLED", False)
         )
-        self.base_url = base_url or os.getenv("OLLAMA_BASE_URL") or getattr(settings, "OLLAMA_BASE_URL", "http://localhost:11434")
+        self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL") or getattr(settings, "OLLAMA_BASE_URL", "http://localhost:11434")).rstrip("/")
         self.model_name = model or os.getenv("OLLAMA_MODEL") or getattr(settings, "OLLAMA_MODEL", "llama3.2")
-        self.is_available = self.enabled
-
-    def check_health(self) -> bool:
-        """Quick probe to verify if Ollama daemon is reachable on localhost."""
-        if not self.enabled:
-            return False
-        import httpx
-        try:
-            with httpx.Client(timeout=httpx.Timeout(0.8, connect=0.6)) as client:
-                res = client.get(f"{self.base_url}/api/version")
-                return res.status_code == 200
-        except Exception:
-            return False
+        self.is_available = bool(self.enabled)
 
     def generate_structured(
         self,
@@ -812,29 +897,25 @@ class OllamaProvider(BaseLLMProvider):
         timeout: float = 25.0
     ) -> Tuple[BaseModel, ProviderExecutionMetadata]:
         import httpx
-        if not self.enabled:
-            raise ValueError("Ollama provider is disabled.")
+        if not self.is_available:
+            raise ProviderFailure(self.provider_name, FailureCategory.UNAVAILABLE, "Ollama is disabled or not running.")
 
         start_t = time.perf_counter()
         schema_json = json.dumps(schema.model_json_schema() if hasattr(schema, "model_json_schema") else schema.schema())
 
-        full_prompt = (
-            f"SYSTEM: {system_prompt}\n\n"
-            f"USER: {user_prompt}\n\n"
-            f"Respond strictly in JSON format conforming to this JSON schema:\n{schema_json}"
-        )
-
         payload = {
             "model": self.model_name,
-            "prompt": full_prompt,
+            "system": system_prompt,
+            "prompt": f"{user_prompt}\n\nRespond ONLY with JSON matching:\n{schema_json}",
+            "format": "json",
             "stream": False,
-            "format": "json"
+            "options": {"temperature": 0.2}
         }
 
+        url = f"{self.base_url}/api/generate"
         try:
-            # Connect timeout 1.0s, read timeout 25s
-            with httpx.Client(timeout=httpx.Timeout(timeout, connect=1.0)) as client:
-                res = client.post(f"{self.base_url}/api/generate", json=payload)
+            with httpx.Client(timeout=httpx.Timeout(timeout, connect=0.8)) as client:
+                res = client.post(url, json=payload)
                 res.raise_for_status()
                 data = res.json()
                 raw_text = data.get("response", "").strip()
@@ -854,14 +935,16 @@ class OllamaProvider(BaseLLMProvider):
                 )
                 return parsed_obj, meta
         except Exception as e:
-            circuit_breaker.record_failure(self.provider_name, e)
-            raise e
+            failure = ProviderFailure(self.provider_name, FailureCategory.UNAVAILABLE, f"Ollama connection failure: {e}", model_name=self.model_name)
+            circuit_breaker.record_failure(self.provider_name, failure, category=FailureCategory.UNAVAILABLE)
+            raise failure
 
 
 class MockProvider(BaseLLMProvider):
     """
     Deterministic Offline Fallback Provider.
-    Respects all SETU pricing floors, margins, and policies with zero network dependencies.
+    Guarantees 100% schema-compliant, safe decision generation respecting all SETU
+    pricing floors, margins, and policies with zero network dependencies.
     """
     def __init__(self, model: str = "mock-model-v2"):
         self.provider_name = "mock"
@@ -874,10 +957,11 @@ class MockProvider(BaseLLMProvider):
         system_prompt: str,
         user_prompt: str,
         schema: Type[BaseModel],
-        timeout: float = 5.0
+        timeout: float = 5.0,
+        context: Optional[NegotiationContext] = None
     ) -> Tuple[BaseModel, ProviderExecutionMetadata]:
         start_t = time.perf_counter()
-        parsed_obj = self._generate_deterministic_mock(user_prompt, schema)
+        parsed_obj = self._generate_deterministic_mock(user_prompt, schema, context=context)
         latency = (time.perf_counter() - start_t) * 1000.0
 
         meta = ProviderExecutionMetadata(
@@ -890,46 +974,83 @@ class MockProvider(BaseLLMProvider):
         )
         return parsed_obj, meta
 
-    def _generate_deterministic_mock(self, prompt: str, schema: Type[BaseModel]) -> BaseModel:
-        # Check if Buyer or Merchant decision
+    def _generate_deterministic_mock(
+        self,
+        prompt: str,
+        schema: Type[BaseModel],
+        context: Optional[NegotiationContext] = None
+    ) -> BaseModel:
         prompt_lower = prompt.lower()
-        if issubclass(schema, BuyerDecision) or schema == BuyerDecision:
-            # Buyer opening offer logic or counter
-            is_round_1 = "round: 1" in prompt_lower or "initial offer" in prompt_lower or "current_round: 1" in prompt_lower or "opening offer" in prompt_lower
-            if "samsung" in prompt_lower:
-                unit_p = Decimal("12800.00") if is_round_1 else Decimal("13200.00")
-                total_p = unit_p
-                prod_id = 4
-                name = "Samsung Galaxy S24 Ultra"
-                orig_p = Decimal("14000.00")
-            elif "earbuds" in prompt_lower or "headphone" in prompt_lower:
-                unit_p = Decimal("1450.00") if is_round_1 else Decimal("1475.00")
-                total_p = Decimal("1899.00") if "bundle" in prompt_lower and not is_round_1 else unit_p
-                prod_id = 1
-                name = "Wireless Noise-Canceling Earbuds"
-                orig_p = Decimal("1599.00")
-            else:
-                unit_p = Decimal("1000.00")
-                total_p = unit_p
-                prod_id = 1
-                name = "Product"
-                orig_p = Decimal("1200.00")
+        s_name = getattr(schema, "__name__", "")
 
-            action = "ACCEPT" if ("1899" in prompt_lower or "13200" in prompt_lower or "accept" in prompt_lower) and not is_round_1 else "OFFER"
-            return BuyerDecision(
+        # ----------------------------------------------------------------------
+        # 1. BuyerDecision Builder
+        # ----------------------------------------------------------------------
+        if s_name == "BuyerDecision" or issubclass(schema, BuyerDecision):
+            prod_id = 1
+            prod_name = "Product"
+            cat_price = Decimal("1000.00")
+            budget = Decimal("1200.00")
+            round_num = 1
+
+            if context:
+                prod_details = context.current_product or {}
+                prod_id = prod_details.get("id", 1)
+                prod_name = prod_details.get("name", "Product")
+                cat_price = context.catalog_price
+                budget = context.buyer_max_budget
+                round_num = context.current_round
+            elif "samsung" in prompt_lower:
+                prod_id = 41
+                prod_name = "Samsung Galaxy A15"
+                cat_price = Decimal("12999.00")
+                budget = Decimal("14000.00")
+            elif "earbud" in prompt_lower:
+                prod_id = 1
+                prod_name = "Wireless Noise-Canceling Earbuds"
+                cat_price = Decimal("1599.00")
+                budget = Decimal("2000.00")
+
+            is_round_1 = (round_num == 1) or ("round 1" in prompt_lower) or ("opening offer" in prompt_lower)
+            
+            # Opening offer calculation (85% of catalog or within budget)
+            if is_round_1:
+                unit_p = min(budget, (cat_price * Decimal("0.85")).quantize(Decimal("0.01")))
+                action = "OFFER"
+                rationale = f"Deterministic initial buyer offer targeting ~15% discount within budget ceiling of INR {budget:.2f}."
+                msg = f"Hi, I would like to offer INR {unit_p:.2f} for {prod_name}."
+            else:
+                # Evaluation of merchant counter-offer
+                last_merchant_price = None
+                if context and context.current_proposal:
+                    last_merchant_price = Decimal(str(context.current_proposal.get("total_amount", 0)))
+
+                if last_merchant_price and last_merchant_price <= budget:
+                    action = "ACCEPT"
+                    unit_p = last_merchant_price
+                    rationale = f"Merchant counter-offer of INR {unit_p:.2f} is within buyer budget of INR {budget:.2f}. Accepted."
+                    msg = f"Deal agreed at INR {unit_p:.2f} for {prod_name}."
+                else:
+                    action = "COUNTER"
+                    unit_p = min(budget, (cat_price * Decimal("0.90")).quantize(Decimal("0.01")))
+                    rationale = f"Countering with revised offer of INR {unit_p:.2f} within budget limit."
+                    msg = f"Can you meet at INR {unit_p:.2f} for {prod_name}?"
+
+            return schema(
                 action=action,
                 product_id=prod_id,
                 quantity=1,
                 unit_price=unit_p,
-                total_amount=total_p,
-                rationale="Deterministic mock proposal calculated within budget and pricing limits.",
-                constraints_checked=["budget_fit", "catalog_price_bound"],
+                total_amount=unit_p,
+                rationale=rationale,
+                message=msg,
+                constraints_checked=["budget_fit", "catalog_price_bound", "deterministic_mock"],
                 basket_items=[
                     BasketItemSchema(
                         product_id=prod_id,
-                        name=name,
+                        name=prod_name,
                         quantity=1,
-                        original_price=orig_p,
+                        original_price=cat_price,
                         negotiated_price=unit_p,
                         is_primary=True
                     )
@@ -937,73 +1058,118 @@ class MockProvider(BaseLLMProvider):
                 accept=(action == "ACCEPT")
             )
 
-        elif issubclass(schema, MerchantDecision) or schema == MerchantDecision:
-            # Merchant decision
-            if "samsung" in prompt_lower:
-                unit_p = Decimal("13200.00")
-                total_p = Decimal("13200.00")
-                prod_id = 4
-                name = "Samsung Galaxy S24 Ultra"
-                orig_p = Decimal("14000.00")
-                cross_id = None
-            elif "earbuds" in prompt_lower:
-                unit_p = Decimal("1499.00")
-                total_p = Decimal("1899.00")
+        # ----------------------------------------------------------------------
+        # 2. MerchantDecision Builder
+        # ----------------------------------------------------------------------
+        elif s_name == "MerchantDecision" or issubclass(schema, MerchantDecision):
+            prod_id = 1
+            prod_name = "Product"
+            cat_price = Decimal("1000.00")
+            floor_price = Decimal("900.00")
+
+            if context:
+                prod_details = context.current_product or {}
+                prod_id = prod_details.get("id", 1)
+                prod_name = prod_details.get("name", "Product")
+                cat_price = context.catalog_price
+                floor_price = context.merchant_min_price
+            elif "samsung" in prompt_lower:
+                prod_id = 41
+                prod_name = "Samsung Galaxy A15"
+                cat_price = Decimal("12999.00")
+                floor_price = Decimal("11049.15")
+            elif "earbud" in prompt_lower:
                 prod_id = 1
-                name = "Wireless Noise-Canceling Earbuds"
-                orig_p = Decimal("1599.00")
-                cross_id = 2
+                prod_name = "Wireless Noise-Canceling Earbuds"
+                cat_price = Decimal("1599.00")
+                floor_price = Decimal("1359.15")
+
+            last_buyer_offer = None
+            if context and context.current_proposal:
+                last_buyer_offer = Decimal(str(context.current_proposal.get("total_amount", 0)))
+
+            if last_buyer_offer and last_buyer_offer >= floor_price:
+                action = "ACCEPT"
+                unit_p = last_buyer_offer
+                rationale = f"Buyer offer of INR {unit_p:.2f} meets or exceeds merchant price floor of INR {floor_price:.2f}. Accepted."
+                msg = f"We accept your offer of INR {unit_p:.2f} for {prod_name}."
             else:
-                unit_p = Decimal("1100.00")
-                total_p = unit_p
-                prod_id = 1
-                name = "Product"
-                orig_p = Decimal("1200.00")
-                cross_id = None
+                action = "COUNTER"
+                # Offer middle ground between catalog and floor
+                unit_p = max(floor_price, (cat_price * Decimal("0.95")).quantize(Decimal("0.01")))
+                rationale = f"Buyer offer was below floor. Counter-offering INR {unit_p:.2f} preserving minimum margin requirements."
+                msg = f"Our best counter-offer is INR {unit_p:.2f} for {prod_name}."
 
-            items = [
-                BasketItemSchema(
-                    product_id=prod_id,
-                    name=name,
-                    quantity=1,
-                    original_price=orig_p,
-                    negotiated_price=unit_p,
-                    is_primary=True
-                )
-            ]
-            if cross_id == 2:
-                items.append(
-                    BasketItemSchema(
-                        product_id=2,
-                        name="Wireless Charging Case",
-                        quantity=1,
-                        original_price=Decimal("499.00"),
-                        negotiated_price=Decimal("400.00"),
-                        is_primary=False
-                    )
-                )
-
-            return MerchantDecision(
-                action="BUNDLE" if cross_id else "COUNTER",
+            return schema(
+                action=action,
                 product_id=prod_id,
                 quantity=1,
                 unit_price=unit_p,
-                total_amount=total_p,
-                rationale="Deterministic mock counter-proposal protecting profit margin boundaries.",
-                margin_check="Margin check: PASSED",
-                cross_sell_product_id=cross_id,
-                basket_items=items,
-                accept=False
+                total_amount=unit_p,
+                rationale=rationale,
+                message=msg,
+                margin_check=f"Margin check: PASSED (Preserved floor INR {floor_price:.2f})",
+                cross_sell_product_id=None,
+                basket_items=[
+                    BasketItemSchema(
+                        product_id=prod_id,
+                        name=prod_name,
+                        quantity=1,
+                        original_price=cat_price,
+                        negotiated_price=unit_p,
+                        is_primary=True
+                    )
+                ],
+                accept=(action == "ACCEPT")
             )
-        elif issubclass(schema, UserIntent) or schema == UserIntent:
+
+        # ----------------------------------------------------------------------
+        # 3. UserIntent Builder
+        # ----------------------------------------------------------------------
+        elif s_name == "UserIntent" or issubclass(schema, UserIntent):
+            prod = "Samsung Galaxy A15" if "samsung" in prompt_lower else (
+                "Wireless Noise-Canceling Earbuds" if "earbud" in prompt_lower else "Product"
+            )
             return UserIntent(
-                product="wireless earbuds" if "earbud" in prompt_lower else "product",
-                max_budget=2000.0 if "2000" in prompt_lower else None,
-                preferences=["bundle"] if "bundle" in prompt_lower else [],
-                quantity=1
+                product=prod,
+                product_query=prod,
+                max_budget=14000.0 if "14000" in prompt_lower else (2000.0 if "2000" in prompt_lower else None),
+                preferences=["standalone"] if "standalone" in prompt_lower else [],
+                quantity=1,
+                standalone_only=bool("standalone" in prompt_lower),
+                confidence=1.0,
+                intent_parse_mode="deterministic",
+                intent_llm_used=False
             )
+
+        # ----------------------------------------------------------------------
+        # 4. Generic Safe Fallback Builder (Fills all required schema fields)
+        # ----------------------------------------------------------------------
         else:
-            return schema()
+            fields_dict = {}
+            model_fields = getattr(schema, "model_fields", None) or getattr(schema, "__fields__", {})
+            for f_name, f_info in model_fields.items():
+                if f_info.is_required() if hasattr(f_info, "is_required") else getattr(f_info, "required", False):
+                    # Fill default based on type
+                    annotation = getattr(f_info, "annotation", None) or getattr(f_info, "type_", None)
+                    if annotation == int:
+                        fields_dict[f_name] = 1
+                    elif annotation == Decimal:
+                        fields_dict[f_name] = Decimal("1000.00")
+                    elif annotation == float:
+                        fields_dict[f_name] = 1000.0
+                    elif annotation == str:
+                        fields_dict[f_name] = "deterministic_mock"
+                    elif annotation == bool:
+                        fields_dict[f_name] = True
+                    elif annotation in (list, List):
+                        fields_dict[f_name] = []
+                    else:
+                        fields_dict[f_name] = None
+            try:
+                return schema(**fields_dict)
+            except Exception:
+                return schema.model_construct(**fields_dict) if hasattr(schema, "model_construct") else schema.construct(**fields_dict)
 
 
 # ==============================================================================
@@ -1018,26 +1184,7 @@ class AIGateway:
     def __init__(self):
         self.circuit_breaker = circuit_breaker
         self.intent_cache = intent_cache
-        self._providers_registry: Dict[str, BaseLLMProvider] = {}
-        self._session_metrics = {
-            "real_llm_calls": 0,
-            "deterministic_operations_avoided": 0,
-            "calls_per_provider": {
-                "cerebras": 0,
-                "groq": 0,
-                "gemini": 0,
-                "nvidia_nim": 0,
-                "openrouter": 0,
-                "ollama": 0,
-                "mock": 0
-            },
-            "fallbacks_triggered": 0,
-            "circuit_breaker_trips": 0
-        }
-        self._init_providers()
-
-    def _init_providers(self):
-        self._providers_registry = {
+        self.providers: Dict[str, BaseLLMProvider] = {
             "cerebras": CerebrasProvider(),
             "groq": GroqProvider(),
             "gemini": GeminiProvider(),
@@ -1046,81 +1193,98 @@ class AIGateway:
             "ollama": OllamaProvider(),
             "mock": MockProvider()
         }
+        self._providers_registry = self.providers
+        self.primary_provider = os.getenv("PRIMARY_LLM_PROVIDER") or getattr(settings, "PRIMARY_LLM_PROVIDER", "cerebras")
+        raw_chain = os.getenv("LLM_PROVIDER_CHAIN") or getattr(settings, "LLM_PROVIDER_CHAIN", "cerebras,groq,gemini,nvidia_nim,openrouter,ollama,mock")
+        self.provider_chain = [p.strip().lower() for p in raw_chain.split(",") if p.strip()]
+        if "mock" not in self.provider_chain:
+            self.provider_chain.append("mock")
+
+        self._session_metrics = {
+            "total_intent_queries": 0,
+            "cached_intent_queries": 0,
+            "deterministic_intent_queries": 0,
+            "real_llm_calls": 0,
+            "deterministic_fallback_calls": 0,
+            "calls_per_provider": {},
+            "avoided_deterministic_operations": 0
+        }
 
     def get_provider(self, name: str) -> BaseLLMProvider:
-        name = name.lower().strip()
-        return self._providers_registry.get(name, self._providers_registry["mock"])
+        return self.providers.get(name.lower().strip(), self.providers["mock"])
 
     def resolve_chain(self, role: Optional[str] = None) -> List[str]:
         """
-        Determines the priority chain for a given role or global default.
-        Priority fallback order:
-        Cerebras -> Groq -> Gemini -> NVIDIA NIM -> OpenRouter -> Ollama -> MockProvider
+        Resolves the provider fallback priority chain for a given role or global default.
+        Always guarantees 'mock' at the very end.
         """
-        if role == "buyer":
-            primary = getattr(settings, "BUYER_LLM_PROVIDER", "cerebras")
-            fallbacks = getattr(settings, "BUYER_LLM_FALLBACKS", "groq,gemini,nvidia_nim,openrouter,ollama,mock")
-        elif role == "merchant":
-            primary = getattr(settings, "MERCHANT_LLM_PROVIDER", "groq")
-            fallbacks = getattr(settings, "MERCHANT_LLM_FALLBACKS", "cerebras,gemini,nvidia_nim,openrouter,ollama,mock")
-        elif role == "auxiliary":
-            primary = getattr(settings, "AUXILIARY_LLM_PROVIDER", "groq")
-            fallbacks = getattr(settings, "AUXILIARY_LLM_FALLBACKS", "cerebras,gemini,nvidia_nim,openrouter,ollama,mock")
-        else:
-            primary = getattr(settings, "PRIMARY_LLM_PROVIDER", "cerebras")
-            fallbacks = getattr(settings, "LLM_PROVIDER_CHAIN", "cerebras,groq,gemini,nvidia_nim,openrouter,ollama,mock")
+        if role:
+            role_key = role.upper().replace("_AGENT", "")
+            fallbacks_str = os.getenv(f"{role_key}_LLM_FALLBACKS") or getattr(settings, f"{role_key}_LLM_FALLBACKS", None)
+            prim = os.getenv(f"{role_key}_LLM_PROVIDER") or getattr(settings, f"{role_key}_LLM_PROVIDER", None)
+            if prim:
+                chain = [prim.strip().lower()]
+                if fallbacks_str:
+                    for f in fallbacks_str.split(","):
+                        f_clean = f.strip().lower()
+                        if f_clean and f_clean not in chain:
+                            chain.append(f_clean)
+                if "mock" not in chain:
+                    chain.append("mock")
+                return chain
 
-        chain = [primary.strip().lower()]
-        for fb in fallbacks.split(","):
-            fb_clean = fb.strip().lower()
-            if fb_clean and fb_clean not in chain:
-                chain.append(fb_clean)
+        return list(self.provider_chain)
 
-        if "mock" not in chain:
-            chain.append("mock")
-        return chain
+    def record_avoided_operation(self, count: int = 1):
+        self._session_metrics["avoided_deterministic_operations"] += count
 
-    def parse_user_intent(self, query: str, budget: Optional[Union[Decimal, float]] = None) -> UserIntent:
+    def parse_user_intent(self, query: str, budget: Optional[Decimal] = None) -> UserIntent:
         """
-        Extracts structured intent from user's natural language.
-        1. Checks IntentCache (0ms, 0 tokens).
-        2. Tries deterministic regex/heuristic parser for clear structured intent (0ms, 0 tokens).
-        3. Falls back to external LLM provider only for ambiguous or conversational queries.
+        Parses user intent with cached intent first, deterministic matching second,
+        and structured LLM fallback only when necessary.
         """
+        self._session_metrics["total_intent_queries"] += 1
+
+        # 1. Check Intent Cache
         cached = self.intent_cache.get(query)
         if cached:
-            self._session_metrics["deterministic_operations_avoided"] += 1
+            self._session_metrics["cached_intent_queries"] += 1
             return cached
 
-        # Try deterministic parse first
-        det_intent = parse_deterministic_intent(query, budget)
+        # 2. Deterministic Regex / Token Parsing (Zero LLM Tokens)
+        det_intent = parse_deterministic_intent(query, budget=budget)
         if det_intent:
-            self._session_metrics["deterministic_operations_avoided"] += 1
+            self._session_metrics["deterministic_intent_queries"] += 1
             self.intent_cache.set(query, det_intent)
             return det_intent
 
-        # Attempt structured parse through provider chain for ambiguous queries
-        system_prompt = (
-            "You are SETU Intent Parser. Extract structured purchase parameters from user natural language query.\n"
-            "Return JSON matching UserIntent schema: product, max_budget (number or null), preferences (list), quantity (number)."
-        )
-        user_prompt = f"User Query: '{query}'\nGiven budget constraint: {budget or 'Not specified'}"
-
+        # 3. LLM Parsing Fallback via Provider Chain
         chain = self.resolve_chain("auxiliary")
-        parsed_intent = None
+        system_prompt = (
+            "You are SETU's Natural Language Intent Understanding engine.\n"
+            "Extract target product, max budget, preferences, quantity, and standalone requirement from user input."
+        )
+        user_prompt = f"Extract intent from query: '{query}'" + (f" (User entered budget: {budget})" if budget else "")
 
+        parsed_intent = None
         for p_name in chain:
             if not self.circuit_breaker.is_available(p_name):
                 continue
+
             provider = self.get_provider(p_name)
             if not getattr(provider, "is_available", True):
                 continue
 
             try:
-                parsed_intent, meta = provider.generate_structured(system_prompt, user_prompt, UserIntent, timeout=12.0)
-                parsed_intent.intent_parse_mode = "llm_fallback"
+                if p_name == "mock":
+                    parsed_intent, meta = provider.generate_structured(system_prompt, user_prompt, UserIntent, timeout=5.0)
+                else:
+                    parsed_intent, meta = provider.generate_structured(system_prompt, user_prompt, UserIntent, timeout=12.0)
+                
+                parsed_intent.intent_parse_mode = "llm_fallback" if p_name != "mock" else "deterministic"
                 parsed_intent.intent_llm_used = (p_name != "mock")
                 self.circuit_breaker.record_success(p_name)
+                
                 if p_name != "mock":
                     self._session_metrics["real_llm_calls"] += 1
                     self._session_metrics["calls_per_provider"][p_name] = self._session_metrics["calls_per_provider"].get(p_name, 0) + 1
@@ -1130,7 +1294,6 @@ class AIGateway:
                 continue
 
         if not parsed_intent:
-            # Deterministic Python fallback
             parsed_intent = MockProvider()._generate_deterministic_mock(query, UserIntent)
             parsed_intent.intent_parse_mode = "deterministic"
             parsed_intent.intent_llm_used = False
@@ -1138,11 +1301,21 @@ class AIGateway:
         self.intent_cache.set(query, parsed_intent)
         return parsed_intent
 
-    def _create_rejection_fallback(self, schema: Type[BaseModel], context: Optional[NegotiationContext] = None, reason: str = "Safety fallback rejection on invalid agent decision.") -> BaseModel:
+    def _create_rejection_fallback(
+        self,
+        schema: Type[BaseModel],
+        context: Optional[NegotiationContext] = None,
+        reason: str = "Safety fallback rejection on invalid agent decision."
+    ) -> BaseModel:
         prod_id = 1
-        if context and context.current_product and isinstance(context.current_product, dict):
-            prod_id = context.current_product.get("id", 1)
-            
+        prod_name = "Product"
+        cat_price = Decimal("1000.00")
+        if context:
+            prod_details = context.current_product or {}
+            prod_id = prod_details.get("id", 1)
+            prod_name = prod_details.get("name", "Product")
+            cat_price = context.catalog_price
+
         s_name = getattr(schema, "__name__", "")
         if s_name == "BuyerDecision" or issubclass(schema, BuyerDecision):
             return schema(
@@ -1152,21 +1325,45 @@ class AIGateway:
                 unit_price=Decimal("0.00"),
                 total_amount=Decimal("0.00"),
                 rationale=reason,
+                message="I cannot proceed with this offer under current constraints.",
                 constraints_checked=["safety_fallback"],
-                basket_items=[]
+                basket_items=[
+                    BasketItemSchema(
+                        product_id=prod_id,
+                        name=prod_name,
+                        quantity=1,
+                        original_price=cat_price,
+                        negotiated_price=Decimal("0.00"),
+                        is_primary=True
+                    )
+                ],
+                accept=False
             )
         elif s_name == "MerchantDecision" or issubclass(schema, MerchantDecision):
             return schema(
                 action="REJECT",
                 product_id=prod_id,
+                quantity=1,
                 unit_price=Decimal("0.00"),
                 total_amount=Decimal("0.00"),
                 rationale=reason,
-                margin_preserved=False,
-                basket_items=[]
+                message="We cannot support this offer within our policy margins.",
+                margin_check="Margin check: FAILED",
+                cross_sell_product_id=None,
+                basket_items=[
+                    BasketItemSchema(
+                        product_id=prod_id,
+                        name=prod_name,
+                        quantity=1,
+                        original_price=cat_price,
+                        negotiated_price=Decimal("0.00"),
+                        is_primary=True
+                    )
+                ],
+                accept=False
             )
         else:
-            return schema(action="REJECT", total_amount=Decimal("0.00"))
+            return MockProvider()._generate_deterministic_mock(reason, schema, context=context)
 
     def generate_negotiation_turn(
         self,
@@ -1194,7 +1391,7 @@ class AIGateway:
                 start_t = time.perf_counter()
                 raw_obj = custom_provider.generate_structured_response(user_prompt, system_prompt, schema)
                 latency = (time.perf_counter() - start_t) * 1000.0
-                
+
                 # Unpack or validate raw_obj into target schema
                 if hasattr(raw_obj, "final_decision") and raw_obj.final_decision is not None:
                     fin = raw_obj.final_decision
@@ -1247,222 +1444,203 @@ class AIGateway:
             if not getattr(provider, "is_available", True):
                 continue
 
-            # Attempt structured generation with 1 bounded retry on invalid schema
+            # Attempt structured generation
             for attempt in range(max_retries + 1):
                 try:
-                    obj, meta = provider.generate_structured(
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        schema=schema,
-                        timeout=getattr(settings, "LLM_TIMEOUT_SECONDS", 20.0)
-                    )
+                    if p_name == "mock":
+                        obj, meta = provider.generate_structured(
+                            system_prompt,
+                            user_prompt,
+                            schema,
+                            timeout=5.0,
+                            context=context
+                        )
+                    else:
+                        obj, meta = provider.generate_structured(
+                            system_prompt,
+                            user_prompt,
+                            schema,
+                            timeout=18.0
+                        )
 
-                    # Validate bounds deterministically
-                    is_valid, validation_err = self._validate_decision_bounds(obj, context)
-                    if not is_valid:
-                        if attempt < max_retries:
-                            logger.warning(f"AIGateway: Decision bounds check failed on {p_name} ({validation_err}). Retrying once...")
-                            user_prompt += f"\nCORRECTION REQUIRED: {validation_err}. Please ensure price and boundaries are strictly respected."
-                            continue
-                        else:
-                            # Clamp / correct deterministically if bounds slightly violated
-                            obj = self._clamp_decision(obj, context)
+                    # Post-generation deterministic validation & clamping
+                    obj = self._clamp_decision(obj, context)
+
+                    meta.agent_role = role
+                    meta.fallback_used = (depth > 0 or p_name == "mock")
+                    meta.fallback_depth = depth
+                    meta.fallback_reason = "; ".join(errors_encountered) if errors_encountered else None
 
                     self.circuit_breaker.record_success(p_name)
-                    meta.agent_role = role
-                    meta.fallback_depth = depth
-                    meta.fallback_used = (depth > 0 or p_name == "mock")
-                    if errors_encountered:
-                        meta.fallback_reason = " | ".join(errors_encountered)
 
                     if p_name != "mock":
                         self._session_metrics["real_llm_calls"] += 1
                         self._session_metrics["calls_per_provider"][p_name] = self._session_metrics["calls_per_provider"].get(p_name, 0) + 1
                     else:
+                        self._session_metrics["deterministic_fallback_calls"] += 1
                         self._session_metrics["calls_per_provider"]["mock"] = self._session_metrics["calls_per_provider"].get("mock", 0) + 1
 
                     return obj, meta
 
                 except Exception as e:
-                    err_msg = f"{p_name}: {type(e).__name__}({str(e)[:150]})"
-                    logger.warning(f"AIGateway: Provider '{p_name}' failed turn generation: {err_msg}")
-                    errors_encountered.append(err_msg)
-                    self._session_metrics["fallbacks_triggered"] += 1
-                    break  # Break inner retry to fail over immediately to next provider
+                    err_msg = str(e)
+                    logger.warning(f"AIGateway: Provider '{p_name}' turn generation attempt {attempt+1} failed: {err_msg[:120]}")
+                    if attempt == max_retries:
+                        errors_encountered.append(f"{p_name}: {err_msg[:80]}")
+                        depth += 1
+                    continue
 
-            depth += 1
-
-        # Fallback to Mock if all failed
+        # Ultimate safety fallback: guaranteed valid MockProvider execution
+        logger.warning(f"AIGateway: All external providers failed. Executing deterministic MockProvider fallback.")
         mock_p = self.get_provider("mock")
-        obj, meta = mock_p.generate_structured(system_prompt, user_prompt, schema)
+        obj, meta = mock_p.generate_structured(system_prompt, user_prompt, schema, timeout=5.0, context=context)
+        obj = self._clamp_decision(obj, context)
         meta.agent_role = role
         meta.fallback_used = True
         meta.fallback_depth = depth
-        meta.fallback_reason = " | ".join(errors_encountered) if errors_encountered else "All real providers bypassed"
+        meta.fallback_reason = "All real LLM providers exhausted or unavailable: " + "; ".join(errors_encountered)
+
+        self._session_metrics["deterministic_fallback_calls"] += 1
         self._session_metrics["calls_per_provider"]["mock"] = self._session_metrics["calls_per_provider"].get("mock", 0) + 1
         return obj, meta
 
+    def _clamp_decision(self, decision: BaseModel, context: NegotiationContext) -> BaseModel:
+        """
+        Applies authoritative SETU policy clamping to agent output.
+        Guarantees that LLM outputs never violate absolute budget or price floor boundaries.
+        """
+        # Ensure basket_items is populated
+        if not getattr(decision, "basket_items", None):
+            prod_id = getattr(decision, "product_id", context.current_product.get("id", 1))
+            prod_name = context.current_product.get("name", "Product")
+            cat_p = context.catalog_price
+            unit_p = getattr(decision, "unit_price", cat_p)
+            decision.basket_items = [
+                BasketItemSchema(
+                    product_id=prod_id,
+                    name=prod_name,
+                    quantity=getattr(decision, "quantity", 1),
+                    original_price=cat_p,
+                    negotiated_price=unit_p,
+                    is_primary=True
+                )
+            ]
+
+        # Buyer clamping
+        if context.agent_role.upper().startswith("BUYER"):
+            if getattr(decision, "total_amount", Decimal("0")) > context.buyer_max_budget:
+                decision.total_amount = context.buyer_max_budget
+                decision.unit_price = context.buyer_max_budget
+                if decision.basket_items and len(decision.basket_items) == 1:
+                    decision.basket_items[0].negotiated_price = context.buyer_max_budget
+
+        # Merchant clamping
+        elif context.agent_role.upper().startswith("MERCHANT"):
+            if getattr(decision, "action", "") in ("COUNTER", "ACCEPT", "BUNDLE"):
+                if getattr(decision, "total_amount", Decimal("0")) < context.merchant_min_price:
+                    decision.total_amount = context.merchant_min_price
+                    decision.unit_price = context.merchant_min_price
+                    if decision.basket_items and len(decision.basket_items) == 1:
+                        decision.basket_items[0].negotiated_price = context.merchant_min_price
+
+        return decision
+
     def _build_role_system_prompt(self, role: str, context: NegotiationContext) -> str:
-        role_upper = role.upper()
-        if "BUYER" in role_upper:
+        prod = context.current_product or {}
+        p_name = prod.get("name", "Product")
+        is_buyer = "BUYER" in role.upper()
+
+        if is_buyer:
             return (
-                "You are the autonomous BUYER AGENT in the SETU AI Commerce Protocol.\n"
-                "Your objective:\n"
-                "1. Minimize spending and secure the best value while staying within the buyer's maximum budget.\n"
-                "2. Formulate strategic offers/counters that are compelling and realistic.\n"
-                "3. Never accept an offer that exceeds buyer_max_budget.\n"
-                "4. Respond ONLY with structured JSON matching the BuyerDecision schema."
+                "You are an autonomous Buyer AI Agent acting for a human customer in SETU.\n"
+                f"Negotiating for: '{p_name}'.\n"
+                f"Your Hard Budget Ceiling: INR {context.buyer_max_budget:.2f}. You must NEVER offer or agree above this.\n"
+                f"Catalog List Price: INR {context.catalog_price:.2f}.\n"
+                f"Current Round: {context.current_round} of 4.\n"
+                "Goal: Secure the best possible value for the customer within budget.\n"
+                "You MUST output ONLY a structured JSON matching the requested schema."
             )
         else:
             return (
-                "You are the autonomous MERCHANT AGENT in the SETU AI Commerce Protocol.\n"
-                "Your objective:\n"
-                "1. Maximize profitable revenue and defend the minimum price floor.\n"
-                "2. Protect product profit margins while closing the sale.\n"
-                "3. Recommend valuable bundle cross-sells where advantageous.\n"
-                "4. Never offer or accept a price below the merchant_min_price floor.\n"
-                "5. Respond ONLY with structured JSON matching the MerchantDecision schema."
+                "You are an autonomous Merchant AI Agent representing the store in SETU.\n"
+                f"Negotiating product: '{p_name}'.\n"
+                f"Catalog Price: INR {context.catalog_price:.2f}.\n"
+                f"Merchant Minimum Price Floor: INR {context.merchant_min_price:.2f}. (Do not sell below this).\n"
+                f"Current Round: {context.current_round} of 4.\n"
+                "Goal: Maximize transaction value and margin while reaching a mutually profitable agreement.\n"
+                "You MUST output ONLY a structured JSON matching the requested schema."
             )
 
     def _build_compact_turn_prompt(self, context: NegotiationContext) -> str:
-        if context.agent_role == "BUYER_AGENT":
-            strategy_hint = (
-                f"Guidelines for Buyer Agent:\n"
-                f"- For opening offer (Round 1), propose an attractive offer between ₹{context.merchant_min_price} and ₹{context.buyer_max_budget} with action 'OFFER'.\n"
-                f"- If Merchant's previous offer is within budget (<= ₹{context.buyer_max_budget}), select action 'ACCEPT'.\n"
-                f"- Otherwise, propose a reasonable counter with action 'COUNTER' (total_amount <= ₹{context.buyer_max_budget})."
-            )
-        else:
-            strategy_hint = (
-                f"Guidelines for Merchant Agent:\n"
-                f"- If Buyer's offer is at or above your minimum price floor (>= ₹{context.merchant_min_price}), select action 'ACCEPT' or a minor 'COUNTER'.\n"
-                f"- If Buyer's offer is below floor, propose a counter with action 'COUNTER' and total_amount >= ₹{context.merchant_min_price}.\n"
-                f"- total_amount must NEVER be lower than ₹{context.merchant_min_price}."
-            )
+        prod = context.current_product or {}
+        p_name = prod.get("name", "Product")
+        lines = [
+            f"=== NEGOTIATION TURN ROUND {context.current_round} ===",
+            f"Target Product: {p_name} (ID: {prod.get('id', 1)})",
+            f"Catalog List Price: INR {context.catalog_price:.2f}",
+            f"Buyer Budget Limit: INR {context.buyer_max_budget:.2f}",
+            f"Merchant Price Floor: INR {context.merchant_min_price:.2f}",
+            f"Remaining Rounds: {context.remaining_rounds}",
+        ]
 
-        return (
-            f"=== DETERMINISTIC NEGOTIATION CONTEXT ===\n"
-            f"Role: {context.agent_role}\n"
-            f"Current Round: {context.current_round} (Remaining: {context.remaining_rounds})\n"
-            f"Target Product: {context.current_product.get('name')} (ID: {context.current_product.get('id')})\n"
-            f"Catalog Price: ₹{context.catalog_price}\n"
-            f"Buyer Max Budget: ₹{context.buyer_max_budget}\n"
-            f"Merchant Price Floor: ₹{context.merchant_min_price}\n"
-            f"Max Allowed Discount: {context.max_allowed_discount}%\n"
-            f"Available Inventory: {context.inventory_availability} units\n"
-            f"Active Policy Limits: {json.dumps(context.relevant_policy_constraints)}\n"
-            f"Previous Offers in Session: {json.dumps(context.previous_offers)}\n"
-            f"=========================================\n"
-            f"{strategy_hint}\n"
-            f"Respond with structured JSON matching the schema (action, product_id, quantity, unit_price, total_amount, rationale)."
-        )
+        if context.current_proposal:
+            amt = context.current_proposal.get("total_amount", context.catalog_price)
+            lines.append(f"Latest Active Proposal Under Review: INR {amt}")
 
-    def _validate_decision_bounds(self, obj: BaseModel, context: NegotiationContext) -> Tuple[bool, Optional[str]]:
-        try:
-            action = getattr(obj, "action", "").upper()
-            if action == "REJECT":
-                return True, None
+        if context.previous_offers:
+            lines.append("Offer History in this session:")
+            for off in context.previous_offers[-3:]:
+                lines.append(f"  - Round {off.get('round', 1)} [{off.get('actor', '').upper()}]: INR {off.get('amount', 0)} ({off.get('action', '')})")
 
-            tot = getattr(obj, "total_amount", None)
-            if tot is None:
-                return False, "total_amount is missing"
-            tot_dec = Decimal(str(tot))
-            if tot_dec <= Decimal("0.00"):
-                return False, "total_amount must be positive for OFFER, COUNTER, and ACCEPT"
-
-            # Check buyer budget ceiling
-            if context.agent_role == "BUYER_AGENT":
-                if tot_dec > context.buyer_max_budget:
-                    return False, f"Total amount ₹{tot_dec} exceeds buyer maximum budget of ₹{context.buyer_max_budget}"
-
-            # Check merchant price floor
-            if context.agent_role == "MERCHANT_AGENT":
-                if tot_dec < context.merchant_min_price:
-                    return False, f"Total amount ₹{tot_dec} is below merchant price floor of ₹{context.merchant_min_price}"
-
-            return True, None
-        except Exception as e:
-            return False, str(e)
-
-    def _clamp_decision(self, obj: BaseModel, context: NegotiationContext) -> BaseModel:
-        action = getattr(obj, "action", "").upper()
-        if action == "REJECT":
-            return obj
-
-        tot = getattr(obj, "total_amount", None)
-        if tot is not None:
-            tot_dec = Decimal(str(tot))
-            if tot_dec <= Decimal("0.00"):
-                # Fallback to realistic starting offer if model returned 0
-                tot_dec = max(context.merchant_min_price, (context.catalog_price * Decimal("0.9")).quantize(Decimal("0.01")))
-                obj.total_amount = tot_dec
-                obj.unit_price = tot_dec
-
-            if context.agent_role == "BUYER_AGENT" and tot_dec > context.buyer_max_budget:
-                obj.total_amount = context.buyer_max_budget
-                obj.unit_price = context.buyer_max_budget
-                obj.rationale += f" [Clamped to max budget of ₹{context.buyer_max_budget}]"
-            elif context.agent_role == "MERCHANT_AGENT" and tot_dec < context.merchant_min_price:
-                obj.total_amount = context.merchant_min_price
-                obj.unit_price = context.merchant_min_price
-                obj.rationale += f" [Clamped to minimum price floor of ₹{context.merchant_min_price}]"
-        return obj
+        lines.append("\nEvaluate the state and formulate your next structured negotiation decision JSON.")
+        return "\n".join(lines)
 
     def get_provider_status(self) -> Dict[str, Any]:
-        """Diagnostic status for GET /api/agent/provider-status (Never exposes API keys)."""
-        chain = self.resolve_chain()
-        circuit_info = self.circuit_breaker.get_status()
+        """
+        Safely returns health, operational status, and circuit state of all providers.
+        Never exposes API keys or credentials.
+        """
+        cb_status = self.circuit_breaker.get_status()
+        prov_status = {}
+
+        for name, prov in self.providers.items():
+            cb = cb_status.get(name, {
+                "available": True,
+                "circuit_state": "CLOSED",
+                "failure_count": 0,
+                "circuit_open_until": None,
+                "last_error": None
+            })
+
+            # Check SDK operational availability for Gemini
+            extra_info = {}
+            if name == "gemini":
+                sdk_type, _, _ = GeminiProvider.get_sdk_status()
+                extra_info["sdk_type"] = sdk_type or "None (ImportError)"
+
+            is_configured = getattr(prov, "is_available", False)
+            prov_status[name] = {
+                "configured": is_configured,
+                "provider_type": prov.provider_type,
+                "model": getattr(prov, "model_name", "n/a"),
+                "circuit": cb,
+                "healthy": is_configured and cb["available"],
+                **extra_info
+            }
 
         return {
             "gateway_status": "ONLINE",
-            "primary_provider": getattr(settings, "PRIMARY_LLM_PROVIDER", "cerebras"),
-            "provider_chain": chain,
-            "providers": {
-                "cerebras": {
-                    "configured": bool(os.getenv("CEREBRAS_API_KEY") or getattr(settings, "CEREBRAS_API_KEY", "")),
-                    "model": getattr(settings, "CEREBRAS_MODEL", "llama3.1-70b"),
-                    "circuit": circuit_info.get("cerebras", {"circuit_state": "CLOSED", "available": True})
-                },
-                "groq": {
-                    "configured": bool(os.getenv("GROQ_API_KEY") or getattr(settings, "GROQ_API_KEY", "")),
-                    "model": getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile"),
-                    "circuit": circuit_info.get("groq", {"circuit_state": "CLOSED", "available": True})
-                },
-                "gemini": {
-                    "configured": bool(os.getenv("GEMINI_API_KEY") or getattr(settings, "GEMINI_API_KEY", "")),
-                    "model": getattr(settings, "LLM_MODEL", "gemini-3.1-flash-lite"),
-                    "circuit": circuit_info.get("gemini", {"circuit_state": "CLOSED", "available": True})
-                },
-                "nvidia_nim": {
-                    "configured": bool(os.getenv("NVIDIA_NIM_API_KEY") or getattr(settings, "NVIDIA_NIM_API_KEY", "")),
-                    "model": getattr(settings, "NVIDIA_NIM_MODEL", "meta/llama-3.3-70b-instruct"),
-                    "circuit": circuit_info.get("nvidia_nim", {"circuit_state": "CLOSED", "available": True})
-                },
-                "openrouter": {
-                    "configured": bool(os.getenv("OPENROUTER_API_KEY") or getattr(settings, "OPENROUTER_API_KEY", "")),
-                    "model": getattr(settings, "OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"),
-                    "circuit": circuit_info.get("openrouter", {"circuit_state": "CLOSED", "available": True})
-                },
-                "ollama": {
-                    "configured": bool(getattr(settings, "OLLAMA_ENABLED", False)),
-                    "model": getattr(settings, "OLLAMA_MODEL", "llama3.2"),
-                    "circuit": circuit_info.get("ollama", {"circuit_state": "CLOSED", "available": True})
-                },
-                "mock": {
-                    "configured": True,
-                    "model": "mock-model-v2",
-                    "circuit": {"circuit_state": "CLOSED", "available": True}
-                }
-            },
-            "session_metrics": self._session_metrics
+            "primary_provider": self.primary_provider,
+            "provider_chain": self.provider_chain,
+            "providers": prov_status,
+            "metrics": self._session_metrics
         }
 
-    def record_avoided_operation(self, count: int = 1):
-        self._session_metrics["deterministic_operations_avoided"] += count
 
-
-# Global singleton instance
+# Global singleton AIGateway
 ai_gateway = AIGateway()
 
 def get_ai_gateway() -> AIGateway:
+    """Returns the central AIGateway singleton instance."""
     return ai_gateway
+

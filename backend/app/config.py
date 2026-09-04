@@ -30,7 +30,7 @@ class Settings:
 
     # LLM General Settings
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")  # Default global fallback provider
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-3.5-flash")
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
     LLM_FALLBACK_TO_MOCK: bool = os.getenv("LLM_FALLBACK_TO_MOCK", "True").lower() in ("true", "1", "yes")
     LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
@@ -62,6 +62,7 @@ class Settings:
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "groq/compound-mini")
 
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
     NVIDIA_NIM_API_KEY: str = os.getenv("NVIDIA_NIM_API_KEY", "")
     NVIDIA_NIM_MODEL: str = os.getenv("NVIDIA_NIM_MODEL", "meta/llama-3.3-70b-instruct")
 
@@ -96,37 +97,38 @@ class Settings:
         self.CIRCUIT_BREAKER_COOLDOWN_SECONDS = float(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "60.0"))
 
         self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "cerebras")
-        self.LLM_MODEL = os.getenv("LLM_MODEL", "llama3.1-70b")
+        self.LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.5-flash")
         self.LLM_API_KEY = os.getenv("LLM_API_KEY", "")
         self.LLM_FALLBACK_TO_MOCK = os.getenv("LLM_FALLBACK_TO_MOCK", "True").lower() in ("true", "1", "yes")
         self.LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
         self.LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
-        self.BUYER_LLM_PROVIDER = os.getenv("BUYER_LLM_PROVIDER", "cerebras")
-        self.BUYER_LLM_MODEL = os.getenv("BUYER_LLM_MODEL", "llama3.1-70b")
-        self.BUYER_LLM_FALLBACKS = os.getenv("BUYER_LLM_FALLBACKS", "groq,gemini,nvidia_nim,openrouter,ollama,mock")
+        self.BUYER_LLM_PROVIDER = os.getenv("BUYER_LLM_PROVIDER", "gemini")
+        self.BUYER_LLM_MODEL = os.getenv("BUYER_LLM_MODEL", "gemini-3.5-flash")
+        self.BUYER_LLM_FALLBACKS = os.getenv("BUYER_LLM_FALLBACKS", "groq,openrouter,mock")
 
         self.MERCHANT_LLM_PROVIDER = os.getenv("MERCHANT_LLM_PROVIDER", "groq")
-        self.MERCHANT_LLM_MODEL = os.getenv("MERCHANT_LLM_MODEL", "llama-3.3-70b-versatile")
-        self.MERCHANT_LLM_FALLBACKS = os.getenv("MERCHANT_LLM_FALLBACKS", "cerebras,gemini,nvidia_nim,openrouter,ollama,mock")
+        self.MERCHANT_LLM_MODEL = os.getenv("MERCHANT_LLM_MODEL", "groq/compound-mini")
+        self.MERCHANT_LLM_FALLBACKS = os.getenv("MERCHANT_LLM_FALLBACKS", "gemini,openrouter,mock")
 
         self.AUXILIARY_LLM_PROVIDER = os.getenv("AUXILIARY_LLM_PROVIDER", "groq")
-        self.AUXILIARY_LLM_MODEL = os.getenv("AUXILIARY_LLM_MODEL", "llama-3.3-70b-versatile")
-        self.AUXILIARY_LLM_FALLBACKS = os.getenv("AUXILIARY_LLM_FALLBACKS", "cerebras,gemini,nvidia_nim,openrouter,ollama,mock")
+        self.AUXILIARY_LLM_MODEL = os.getenv("AUXILIARY_LLM_MODEL", "groq/compound-mini")
+        self.AUXILIARY_LLM_FALLBACKS = os.getenv("AUXILIARY_LLM_FALLBACKS", "gemini,openrouter,mock")
 
         self.CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
         self.CEREBRAS_MODEL = os.getenv("CEREBRAS_MODEL", "llama3.1-70b")
 
         self.GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-        self.GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        self.GROQ_MODEL = os.getenv("GROQ_MODEL", "groq/compound-mini")
 
         self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+        self.GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 
         self.NVIDIA_NIM_API_KEY = os.getenv("NVIDIA_NIM_API_KEY", "")
         self.NVIDIA_NIM_MODEL = os.getenv("NVIDIA_NIM_MODEL", "meta/llama-3.3-70b-instruct")
 
         self.OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-        self.OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+        self.OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "dots-studio/dots-3-note-preview:free")
 
         self.OLLAMA_ENABLED = os.getenv("OLLAMA_ENABLED", "false").lower() in ("true", "1", "yes")
         self.OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")

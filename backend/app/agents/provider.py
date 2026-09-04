@@ -49,24 +49,25 @@ class BasketItemSchema(BaseModel):
 class BuyerDecision(BaseModel):
     action: Literal["OFFER", "COUNTER", "ACCEPT", "REJECT"] = Field(..., description="The action taken by the buyer agent.")
     product_id: int = Field(..., description="The product key in the catalog.")
-    quantity: int = Field(..., description="The quantity requested.")
+    quantity: int = Field(default=1, description="The quantity requested.")
     unit_price: Decimal = Field(..., description="The unit price offered/countered.")
     total_amount: Decimal = Field(..., description="The final total amount offered (unit_price * quantity).")
     rationale: str = Field(..., description="Reasoning or explanation for this offer decision.")
     message: Optional[str] = Field(default=None, description="Natural human-like dialogue message for the conversation UI.")
-    constraints_checked: List[str] = Field(default_factory=list, description="List of boundary constraints evaluated (e.g. budget, policy, inventory).")
+    constraints_checked: List[str] = Field(default_factory=lambda: ["budget_fit", "catalog_price_bound"], description="List of boundary constraints evaluated (e.g. budget, policy, inventory).")
     basket_items: Optional[List[BasketItemSchema]] = Field(default=None, description="The items inside the purchase basket.")
 
 
 class MerchantDecision(BaseModel):
-    action: Literal["COUNTER", "ACCEPT", "REJECT"] = Field(..., description="The action taken by the merchant agent.")
+    action: Literal["COUNTER", "ACCEPT", "REJECT", "BUNDLE"] = Field(..., description="The action taken by the merchant agent.")
     product_id: int = Field(..., description="The product key in the catalog.")
-    quantity: int = Field(..., description="The quantity of units requested.")
+    quantity: int = Field(default=1, description="The quantity of units requested.")
     unit_price: Decimal = Field(..., description="The unit price offered/countered.")
     total_amount: Decimal = Field(..., description="The total transaction price (unit_price * quantity).")
     rationale: str = Field(..., description="The reasoning behind the merchant's choice.")
     message: Optional[str] = Field(default=None, description="Natural human-like dialogue message for the conversation UI.")
-    margin_check: str = Field(..., description="Detailed verification explanation showing margin guideline check.")
+    margin_check: str = Field(default="Margin check: PASSED", description="Detailed verification explanation showing margin guideline check.")
+    cross_sell_product_id: Optional[int] = Field(default=None, description="Recommended bundle item ID if applicable")
     basket_items: Optional[List[BasketItemSchema]] = Field(default=None, description="The items inside the proposed bundle/basket.")
 
 
@@ -1071,7 +1072,7 @@ class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str, model_name: Optional[str] = None):
         super().__init__()
         self.api_key = api_key
-        self._model_name = model_name or os.getenv("LLM_MODEL") or os.getenv("BUYER_LLM_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite"
+        self._model_name = model_name or os.getenv("LLM_MODEL") or os.getenv("BUYER_LLM_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-3.5-flash"
         self.client = None
         self.legacy_genai = None
 

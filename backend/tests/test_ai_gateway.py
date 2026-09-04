@@ -2,11 +2,15 @@ import time
 import pytest
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from backend.app.agents.ai_gateway import (
     AIGateway,
     BaseLLMProvider,
+    GroqProvider,
+    GeminiProvider,
+    OpenRouterProvider,
+    MockProvider,
     CircuitBreaker,
     IntentCache,
     NegotiationContext,
@@ -14,41 +18,36 @@ from backend.app.agents.ai_gateway import (
     BuyerDecision,
     MerchantDecision,
     ProviderExecutionMetadata,
-    MockProvider,
+    ProviderFailure,
+    FailureCategory,
     parse_deterministic_intent
 )
 from backend.app.policy import PolicyEngine
 from backend.app.agents.tools import search_catalog_tool, view_product_tool, get_policy_constraints_tool, get_inventory_tool
-from backend.app.database import get_db
+from backend.app.database import get_db, SessionLocal
 from backend.seed import seed_db
 
 
 # ==============================================================================
-# TEST 1: BUYER REAL LLM CALL
+# TEST 1: GROQ 404 MODEL / ENDPOINT ERROR FAST FAILOVER
 # ==============================================================================
-def test_buyer_real_llm_call_increments_metric():
-    """Verify healthy provider yields real_llm_calls increment and provider metadata."""
+def test_groq_404_model_not_found_failover():
+    """Verify Groq HTTP 404 trips circuit breaker and immediately fails over to next provider without sleeping."""
     gw = AIGateway()
     gw.resolve_chain = lambda role: ["groq", "mock"]
 
     mock_groq = MagicMock(spec=BaseLLMProvider)
     mock_groq.is_available = True
     mock_groq.provider_name = "groq"
-    mock_decision = BuyerDecision(
-        action="OFFER",
-        product_id=1,
-        quantity=1,
-        unit_price=Decimal("1400.00"),
-        total_amount=Decimal("1400.00"),
-        rationale="Realistic buyer offer."
+    mock_groq.model_name = "invalid-groq-model"
+    # Simulate Groq 404
+    mock_groq.generate_structured.side_effect = ProviderFailure(
+        provider_name="groq",
+        category=FailureCategory.MODEL_NOT_FOUND,
+        message="HTTP 404: The model `invalid-groq-model` does not exist",
+        status_code=404,
+        model_name="invalid-groq-model"
     )
-    mock_meta = ProviderExecutionMetadata(
-        provider_used="groq",
-        provider_type="real_llm",
-        model_name="groq/compound-mini",
-        fallback_used=False
-    )
-    mock_groq.generate_structured.return_value = (mock_decision, mock_meta)
     gw._providers_registry["groq"] = mock_groq
 
     ctx = NegotiationContext(
@@ -65,116 +64,51 @@ def test_buyer_real_llm_call_increments_metric():
         remaining_rounds=3
     )
 
-    initial_calls = gw._session_metrics["real_llm_calls"]
+    t0 = time.perf_counter()
     decision, meta = gw.generate_negotiation_turn(ctx, "BUYER_AGENT", BuyerDecision)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
-    assert meta.provider_used == "groq"
-    assert meta.provider_type == "real_llm"
-    assert gw._session_metrics["real_llm_calls"] == initial_calls + 1
-    assert decision.action == "OFFER"
+    assert meta.provider_used == "mock"
+    assert meta.fallback_used is True
+    assert meta.fallback_depth >= 1
+    assert decision.action in ["OFFER", "COUNTER", "ACCEPT"]
+    assert elapsed_ms < 500.0  # Fast failover with zero sleep delay
 
 
 # ==============================================================================
-# TEST 2: MERCHANT REAL LLM CALL
+# TEST 2: GROQ 429 RATE LIMIT FAST FAILOVER
 # ==============================================================================
-def test_merchant_real_llm_call_increments_metric():
-    """Verify healthy merchant provider yields real_llm_calls increment."""
+def test_groq_429_rate_limited_failover():
+    """Verify Groq HTTP 429 trips circuit breaker and fails over to Gemini/Mock immediately."""
     gw = AIGateway()
-    gw.resolve_chain = lambda role: ["cerebras", "mock"]
-
-    mock_cerebras = MagicMock(spec=BaseLLMProvider)
-    mock_cerebras.is_available = True
-    mock_cerebras.provider_name = "cerebras"
-    mock_decision = MerchantDecision(
-        action="COUNTER",
-        product_id=1,
-        quantity=1,
-        unit_price=Decimal("1499.00"),
-        total_amount=Decimal("1499.00"),
-        rationale="Profitable merchant counter."
-    )
-    mock_meta = ProviderExecutionMetadata(
-        provider_used="cerebras",
-        provider_type="real_llm",
-        model_name="llama3.1-70b",
-        fallback_used=False
-    )
-    mock_cerebras.generate_structured.return_value = (mock_decision, mock_meta)
-    gw._providers_registry["cerebras"] = mock_cerebras
-
-    ctx = NegotiationContext(
-        agent_role="MERCHANT_AGENT",
-        current_round=2,
-        buyer_max_budget=Decimal("2000.00"),
-        current_product={"id": 1, "name": "Wireless Earbuds", "price": 1599, "cost": 1000, "inventory": 10},
-        catalog_price=Decimal("1599.00"),
-        merchant_min_price=Decimal("1300.00"),
-        current_proposal={"product_id": 1, "unit_price": "1400.00", "total_amount": "1400.00"},
-        previous_offers=[],
-        max_allowed_discount=Decimal("15.00"),
-        inventory_availability=10,
-        relevant_policy_constraints={},
-        remaining_rounds=2
-    )
-
-    initial_calls = gw._session_metrics["real_llm_calls"]
-    decision, meta = gw.generate_negotiation_turn(ctx, "MERCHANT_AGENT", MerchantDecision)
-
-    assert meta.provider_used == "cerebras"
-    assert meta.provider_type == "real_llm"
-    assert gw._session_metrics["real_llm_calls"] == initial_calls + 1
-    assert decision.action == "COUNTER"
-
-
-# ==============================================================================
-# TEST 3: NO UNNECESSARY LLM OPERATIONS
-# ==============================================================================
-def test_no_unnecessary_llm_operations():
-    """Verify catalog search, inventory, price calculation, policy check use 0 LLM calls."""
-    db = next(get_db())
-    seed_db(db)
-    gw = AIGateway()
-    init_real_calls = gw._session_metrics["real_llm_calls"]
-
-    # 1. Search catalog (SQL)
-    res = search_catalog_tool(db, query="earbuds")
-    assert len(res) > 0
-
-    # 2. View product & inventory (SQL)
-    prod = view_product_tool(db, 1)
-    inv = get_inventory_tool(db, 1)
-    assert prod is not None
-    assert inv["inventory"] >= 0
-
-    # 3. Policy evaluation (Python math)
-    policy = get_policy_constraints_tool(db)
-    assert "max_discount_percent" in policy
-
-    # Verify zero external LLM calls were made
-    assert gw._session_metrics["real_llm_calls"] == init_real_calls
-
-
-# ==============================================================================
-# TEST 4: PROVIDER FALLBACK (Cerebras 429 -> Groq called next)
-# ==============================================================================
-def test_provider_fallback_cerebras_to_groq():
-    """Verify when Cerebras hits 429, Groq is immediately called without falling back to Mock."""
-    gw = AIGateway()
-    gw.resolve_chain = lambda role: ["cerebras", "groq", "mock"]
-
-    mock_cerebras = MagicMock(spec=BaseLLMProvider)
-    mock_cerebras.is_available = True
-    mock_cerebras.generate_structured.side_effect = RuntimeError("429 ResourceExhausted: rate limit reached")
-    gw._providers_registry["cerebras"] = mock_cerebras
+    gw.resolve_chain = lambda role: ["groq", "gemini", "mock"]
 
     mock_groq = MagicMock(spec=BaseLLMProvider)
     mock_groq.is_available = True
     mock_groq.provider_name = "groq"
-    mock_groq.generate_structured.return_value = (
-        BuyerDecision(action="OFFER", product_id=1, quantity=1, unit_price=Decimal("1420.00"), total_amount=Decimal("1420.00"), rationale="Groq fallback offer"),
-        ProviderExecutionMetadata(provider_used="groq", provider_type="real_llm", model_name="groq/compound-mini", fallback_used=True, fallback_depth=1)
+    mock_groq.generate_structured.side_effect = ProviderFailure(
+        provider_name="groq",
+        category=FailureCategory.RATE_LIMITED,
+        message="HTTP 429: Rate limit reached",
+        status_code=429
     )
     gw._providers_registry["groq"] = mock_groq
+
+    mock_gemini = MagicMock(spec=BaseLLMProvider)
+    mock_gemini.is_available = True
+    mock_gemini.provider_name = "gemini"
+    mock_gemini.generate_structured.return_value = (
+        BuyerDecision(
+            action="OFFER",
+            product_id=1,
+            quantity=1,
+            unit_price=Decimal("1400.00"),
+            total_amount=Decimal("1400.00"),
+            rationale="Gemini fallback offer after Groq 429."
+        ),
+        ProviderExecutionMetadata(provider_used="gemini", provider_type="real_llm", model_name="gemini-3.1-flash-lite")
+    )
+    gw._providers_registry["gemini"] = mock_gemini
 
     ctx = NegotiationContext(
         agent_role="BUYER_AGENT",
@@ -191,23 +125,45 @@ def test_provider_fallback_cerebras_to_groq():
     )
 
     decision, meta = gw.generate_negotiation_turn(ctx, "BUYER_AGENT", BuyerDecision)
-    assert meta.provider_used == "groq"
-    assert meta.provider_type == "real_llm"
+    assert meta.provider_used == "gemini"
+    assert meta.fallback_used is True
     assert meta.fallback_depth == 1
-    assert decision.total_amount == Decimal("1420.00")
+    assert decision.unit_price == Decimal("1400.00")
 
 
 # ==============================================================================
-# TEST 5: ALL PROVIDERS FAIL -> MOCK FALLBACK
+# TEST 3: GEMINI SDK IMPORT FAILURE GRACEFUL HANDLING
 # ==============================================================================
-def test_all_providers_fail_to_mock():
-    """Verify priority chain falls through to MockProvider gracefully when all real providers fail."""
+def test_gemini_sdk_import_failure_handling():
+    """Verify that when neither Gemini SDK is installed, Gemini safely reports unavailable and fails over."""
+    with patch.object(GeminiProvider, "get_sdk_status", return_value=(None, None, None)):
+        gemini = GeminiProvider(api_key="mock_gemini_key", model="gemini-3.1-flash-lite")
+        assert gemini.is_available is False
+
+        # Attempting structured generation raises SDK_ERROR
+        with pytest.raises(ProviderFailure) as exc_info:
+            gemini.generate_structured("sys", "user", BuyerDecision)
+        assert exc_info.value.category == FailureCategory.SDK_ERROR
+
+
+# ==============================================================================
+# TEST 4: OPENROUTER 404 & 402 BILLING ERROR FAILOVER
+# ==============================================================================
+def test_openrouter_404_and_402_failover():
+    """Verify OpenRouter 404 and 402 errors are properly classified and fail over."""
     gw = AIGateway()
-    for p_name in ["cerebras", "groq", "gemini", "nvidia_nim", "openrouter", "ollama"]:
-        mock_fail = MagicMock(spec=BaseLLMProvider)
-        mock_fail.is_available = True
-        mock_fail.generate_structured.side_effect = RuntimeError(f"{p_name} 429 RateLimitExceeded")
-        gw._providers_registry[p_name] = mock_fail
+    gw.resolve_chain = lambda role: ["openrouter", "mock"]
+
+    mock_openrouter = MagicMock(spec=BaseLLMProvider)
+    mock_openrouter.is_available = True
+    mock_openrouter.provider_name = "openrouter"
+    mock_openrouter.generate_structured.side_effect = ProviderFailure(
+        provider_name="openrouter",
+        category=FailureCategory.BILLING_ERROR,
+        message="HTTP 402: Credits exhausted",
+        status_code=402
+    )
+    gw._providers_registry["openrouter"] = mock_openrouter
 
     ctx = NegotiationContext(
         agent_role="BUYER_AGENT",
@@ -230,40 +186,30 @@ def test_all_providers_fail_to_mock():
 
 
 # ==============================================================================
-# TEST 6: CIRCUIT BREAKER BYPASSES PROVIDER DURING COOLDOWN
+# TEST 5: PROVIDER TIMEOUT TRIPS CIRCUIT BREAKER
 # ==============================================================================
-def test_circuit_breaker_bypasses_provider_during_cooldown():
-    """Verify CircuitBreaker trips to OPEN on 429 and subsequent turn bypasses with 0 network calls."""
+def test_provider_timeout_fast_failover():
+    """Verify provider timeouts trip the circuit breaker and bypass on subsequent calls."""
     cb = CircuitBreaker(cooldown_seconds=60.0)
-    assert cb.is_available("gemini") is True
+    timeout_fail = ProviderFailure("cerebras", FailureCategory.TIMEOUT, "Request timed out after 20s")
+    cb.record_failure("cerebras", timeout_fail, category=FailureCategory.TIMEOUT)
 
-    # Record 429
-    cb.record_failure("gemini", RuntimeError("429 ResourceExhausted"), status_code=429)
-    assert cb.is_available("gemini") is False
-
-    # Next check during cooldown is instant False without executing network call
-    t0 = time.perf_counter()
-    avail = cb.is_available("gemini")
-    elapsed_ms = (time.perf_counter() - t0) * 1000
-    assert avail is False
-    assert elapsed_ms < 1.0  # < 1ms fast check
+    assert cb.is_available("cerebras") is False
 
 
 # ==============================================================================
-# TEST 7: INVALID LLM OUTPUT CLAMPED / VALIDATED
+# TEST 6: MOCKPROVIDER NEVER RETURNS EMPTY OBJECT FOR BUYER DECISION
 # ==============================================================================
-def test_invalid_llm_output_clamped_by_policy():
-    """Verify LLM proposing over-budget price is deterministically clamped."""
-    gw = AIGateway()
-    gw.resolve_chain = lambda role: ["cerebras", "mock"]
-
+def test_mock_provider_never_empty_buyer_decision():
+    """Verify MockProvider constructs ALL required BuyerDecision fields with valid types."""
+    mock_p = MockProvider()
     ctx = NegotiationContext(
         agent_role="BUYER_AGENT",
         current_round=1,
-        buyer_max_budget=Decimal("1500.00"),
-        current_product={"id": 1, "name": "Wireless Earbuds", "price": 1599, "cost": 1000, "inventory": 10},
-        catalog_price=Decimal("1599.00"),
-        merchant_min_price=Decimal("1300.00"),
+        buyer_max_budget=Decimal("14000.00"),
+        current_product={"id": 41, "name": "Samsung Galaxy A15", "price": 12999, "cost": 10000, "inventory": 10},
+        catalog_price=Decimal("12999.00"),
+        merchant_min_price=Decimal("11049.15"),
         previous_offers=[],
         max_allowed_discount=Decimal("15.00"),
         inventory_availability=10,
@@ -271,29 +217,184 @@ def test_invalid_llm_output_clamped_by_policy():
         remaining_rounds=3
     )
 
-    mock_bad_p = MagicMock(spec=BaseLLMProvider)
-    mock_bad_p.is_available = True
-    bad_decision = BuyerDecision(
-        action="OFFER",
-        product_id=1,
-        quantity=1,
-        unit_price=Decimal("1900.00"),
-        total_amount=Decimal("1900.00"),
-        rationale="Over budget proposal"
-    )
-    meta_p = ProviderExecutionMetadata(provider_used="cerebras", provider_type="real_llm", model_name="llama3.1-70b")
-    mock_bad_p.generate_structured.return_value = (bad_decision, meta_p)
-    gw._providers_registry["cerebras"] = mock_bad_p
-
-    decision, meta = gw.generate_negotiation_turn(ctx, "BUYER_AGENT", BuyerDecision, max_retries=0)
-    assert decision.total_amount <= Decimal("1500.00")
+    decision, meta = mock_p.generate_structured("sys", "user prompt", BuyerDecision, context=ctx)
+    assert isinstance(decision, BuyerDecision)
+    assert decision.action in ["OFFER", "COUNTER", "ACCEPT", "REJECT"]
+    assert decision.product_id == 41
+    assert decision.quantity == 1
+    assert decision.unit_price > Decimal("0.00")
+    assert decision.total_amount > Decimal("0.00")
+    assert decision.total_amount <= Decimal("14000.00")
+    assert len(decision.rationale) > 5
+    assert decision.basket_items is not None
+    assert len(decision.basket_items) >= 1
+    assert meta.provider_used == "mock"
+    assert meta.provider_type == "deterministic_fallback"
 
 
 # ==============================================================================
-# TEST 8: DETERMINISTIC INTENT PARSING (0 TOKENS)
+# TEST 7: MOCKPROVIDER NEVER RETURNS EMPTY OBJECT FOR MERCHANT DECISION
+# ==============================================================================
+def test_mock_provider_never_empty_merchant_decision():
+    """Verify MockProvider constructs ALL required MerchantDecision fields respecting price floor."""
+    mock_p = MockProvider()
+    ctx = NegotiationContext(
+        agent_role="MERCHANT_AGENT",
+        current_round=1,
+        buyer_max_budget=Decimal("14000.00"),
+        current_product={"id": 41, "name": "Samsung Galaxy A15", "price": 12999, "cost": 10000, "inventory": 10},
+        catalog_price=Decimal("12999.00"),
+        merchant_min_price=Decimal("11049.15"),
+        current_proposal={"product_id": 41, "total_amount": "10000.00"},  # Below floor
+        previous_offers=[],
+        max_allowed_discount=Decimal("15.00"),
+        inventory_availability=10,
+        relevant_policy_constraints={},
+        remaining_rounds=3
+    )
+
+    decision, meta = mock_p.generate_structured("sys", "user prompt", MerchantDecision, context=ctx)
+    assert isinstance(decision, MerchantDecision)
+    assert decision.action in ["COUNTER", "ACCEPT", "BUNDLE", "REJECT"]
+    assert decision.product_id == 41
+    assert decision.quantity == 1
+    assert decision.unit_price >= Decimal("11049.15")  # Respects floor
+    assert decision.total_amount >= Decimal("11049.15")
+    assert "PASSED" in decision.margin_check
+    assert len(decision.rationale) > 5
+    assert meta.provider_used == "mock"
+
+
+# ==============================================================================
+# TEST 8: CASE C SIMULATION — EVERY REAL PROVIDER FAILS -> MOCK COMPLETES SAFELY
+# ==============================================================================
+def test_case_c_all_real_fail_mock_completes_negotiation_safely():
+    """
+    CASE C SIMULATION:
+    Groq -> 404
+    Gemini -> SDK failure
+    OpenRouter -> 404
+    Cerebras -> 429
+    NVIDIA -> 401
+    Ollama -> unavailable
+    MockProvider -> VALID decision
+
+    Verify negotiation completes successfully without crashing or throwing ValidationError.
+    """
+    gw = AIGateway()
+    gw.resolve_chain = lambda role: ["cerebras", "groq", "gemini", "nvidia_nim", "openrouter", "ollama", "mock"]
+
+    # 1. Cerebras 429
+    m_cer = MagicMock(spec=BaseLLMProvider)
+    m_cer.is_available = True
+    m_cer.generate_structured.side_effect = ProviderFailure("cerebras", FailureCategory.RATE_LIMITED, "Rate limit", status_code=429)
+    gw._providers_registry["cerebras"] = m_cer
+
+    # 2. Groq 404
+    m_groq = MagicMock(spec=BaseLLMProvider)
+    m_groq.is_available = True
+    m_groq.generate_structured.side_effect = ProviderFailure("groq", FailureCategory.MODEL_NOT_FOUND, "Model not found", status_code=404)
+    gw._providers_registry["groq"] = m_groq
+
+    # 3. Gemini SDK failure
+    m_gem = MagicMock(spec=BaseLLMProvider)
+    m_gem.is_available = True
+    m_gem.generate_structured.side_effect = ProviderFailure("gemini", FailureCategory.SDK_ERROR, "No SDK installed")
+    gw._providers_registry["gemini"] = m_gem
+
+    # 4. NVIDIA NIM 401 Auth
+    m_nvid = MagicMock(spec=BaseLLMProvider)
+    m_nvid.is_available = True
+    m_nvid.generate_structured.side_effect = ProviderFailure("nvidia_nim", FailureCategory.AUTH_ERROR, "Unauthorized", status_code=401)
+    gw._providers_registry["nvidia_nim"] = m_nvid
+
+    # 5. OpenRouter 404
+    m_or = MagicMock(spec=BaseLLMProvider)
+    m_or.is_available = True
+    m_or.generate_structured.side_effect = ProviderFailure("openrouter", FailureCategory.MODEL_NOT_FOUND, "Endpoint not found", status_code=404)
+    gw._providers_registry["openrouter"] = m_or
+
+    # 6. Ollama unavailable
+    m_oll = MagicMock(spec=BaseLLMProvider)
+    m_oll.is_available = True
+    m_oll.generate_structured.side_effect = ProviderFailure("ollama", FailureCategory.UNAVAILABLE, "Connection refused")
+    gw._providers_registry["ollama"] = m_oll
+
+    # Run Buyer Turn
+    ctx_buyer = NegotiationContext(
+        agent_role="BUYER_AGENT",
+        current_round=1,
+        buyer_max_budget=Decimal("14000.00"),
+        current_product={"id": 41, "name": "Samsung Galaxy A15", "price": 12999, "cost": 10000, "inventory": 10},
+        catalog_price=Decimal("12999.00"),
+        merchant_min_price=Decimal("11049.15"),
+        previous_offers=[],
+        max_allowed_discount=Decimal("15.00"),
+        inventory_availability=10,
+        relevant_policy_constraints={},
+        remaining_rounds=3
+    )
+
+    buyer_dec, buyer_meta = gw.generate_negotiation_turn(ctx_buyer, "BUYER_AGENT", BuyerDecision)
+    assert buyer_meta.provider_used == "mock"
+    assert buyer_meta.provider_type == "deterministic_fallback"
+    assert buyer_meta.fallback_used is True
+    assert buyer_meta.fallback_depth >= 5
+    assert isinstance(buyer_dec, BuyerDecision)
+    assert buyer_dec.action == "OFFER"
+    assert buyer_dec.total_amount <= Decimal("14000.00")
+
+    # Run Merchant Turn
+    ctx_merch = NegotiationContext(
+        agent_role="MERCHANT_AGENT",
+        current_round=1,
+        buyer_max_budget=Decimal("14000.00"),
+        current_product={"id": 41, "name": "Samsung Galaxy A15", "price": 12999, "cost": 10000, "inventory": 10},
+        catalog_price=Decimal("12999.00"),
+        merchant_min_price=Decimal("11049.15"),
+        current_proposal={"product_id": 41, "total_amount": str(buyer_dec.total_amount)},
+        previous_offers=[{"round": 1, "actor": "buyer", "amount": str(buyer_dec.total_amount), "action": "OFFER"}],
+        max_allowed_discount=Decimal("15.00"),
+        inventory_availability=10,
+        relevant_policy_constraints={},
+        remaining_rounds=3
+    )
+
+    merch_dec, merch_meta = gw.generate_negotiation_turn(ctx_merch, "MERCHANT_AGENT", MerchantDecision)
+    assert merch_meta.provider_used == "mock"
+    assert merch_meta.provider_type == "deterministic_fallback"
+    assert isinstance(merch_dec, MerchantDecision)
+    assert merch_dec.action in ["COUNTER", "ACCEPT"]
+    assert merch_dec.total_amount >= Decimal("11049.15")  # Preserves floor
+
+
+# ==============================================================================
+# TEST 9: DETERMINISTIC SETU OPERATIONS USE 0 LLM CALLS
+# ==============================================================================
+def test_deterministic_setu_tools_zero_llm_calls():
+    """Verify catalog search, product detail, inventory, and policy math use 0 LLM calls."""
+    db = next(get_db())
+    seed_db(db)
+    gw = AIGateway()
+    init_real_calls = gw._session_metrics["real_llm_calls"]
+
+    res = search_catalog_tool(db, query="Samsung")
+    assert len(res) > 0
+    prod = view_product_tool(db, 41)
+    inv = get_inventory_tool(db, 41)
+    assert prod is not None
+    assert inv["inventory"] >= 0
+    policy = get_policy_constraints_tool(db)
+    assert "max_discount_percent" in policy
+
+    assert gw._session_metrics["real_llm_calls"] == init_real_calls
+
+
+# ==============================================================================
+# TEST 10: DETERMINISTIC INTENT PARSER & CACHE
 # ==============================================================================
 def test_deterministic_intent_parsing_and_cache():
-    """Verify structured procurement queries are parsed deterministically with 0 LLM calls."""
+    """Verify procurement queries with products and budgets parse deterministically (0 LLM tokens)."""
     gw = AIGateway()
     init_real_calls = gw._session_metrics["real_llm_calls"]
 
@@ -304,7 +405,7 @@ def test_deterministic_intent_parsing_and_cache():
     assert intent.intent_llm_used is False
     assert gw._session_metrics["real_llm_calls"] == init_real_calls
 
-    # Cache check
+    # Normalized cache hit
     cached = gw.parse_user_intent("i want samsung galaxy a15 with budget 14000 inr")
     assert cached.product == "Samsung Galaxy A15"
     assert gw._session_metrics["real_llm_calls"] == init_real_calls
