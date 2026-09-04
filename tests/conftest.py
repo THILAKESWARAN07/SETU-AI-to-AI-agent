@@ -3,6 +3,9 @@ os.environ["LLM_PROVIDER"] = "mock"
 os.environ.pop("BUYER_LLM_PROVIDER", None)
 os.environ.pop("MERCHANT_LLM_PROVIDER", None)
 os.environ.pop("AUXILIARY_LLM_PROVIDER", None)
+os.environ.pop("BUYER_LLM_FALLBACKS", None)
+os.environ.pop("MERCHANT_LLM_FALLBACKS", None)
+os.environ.pop("AUXILIARY_LLM_FALLBACKS", None)
 os.environ["PAYMENT_MODE"] = "mock"
 
 import pytest

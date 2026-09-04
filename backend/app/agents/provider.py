@@ -1071,7 +1071,7 @@ class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str, model_name: Optional[str] = None):
         super().__init__()
         self.api_key = api_key
-        self._model_name = model_name or os.getenv("BUYER_LLM_MODEL") or os.getenv("LLM_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite"
+        self._model_name = model_name or os.getenv("LLM_MODEL") or os.getenv("BUYER_LLM_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite"
         self.client = None
         self.legacy_genai = None
 
@@ -1092,12 +1092,11 @@ class GeminiProvider(LLMProvider):
         
         import time
         start_t = time.perf_counter()
-        time.sleep(0.05)
 
-        max_retries = int(os.getenv("LLM_MAX_RETRIES", "3"))
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "1"))
         response_text = ""
 
-        for attempt in range(max_retries):
+        for attempt in range(max_retries + 1):
             try:
                 if self.client:
                     from google.genai import types
@@ -1118,16 +1117,13 @@ class GeminiProvider(LLMProvider):
                     break
             except Exception as e:
                 err_str = str(e)
-                if ("ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower()) and attempt < max_retries - 1:
-                    wait_sec = 8.0 * (attempt + 1)
-                    match = re.search(r'retry in\s+([\d\.]+)\s*s', err_str, re.IGNORECASE)
-                    if match:
-                        try:
-                            wait_sec = min(float(match.group(1)) + 1.0, 30.0)
-                        except Exception:
-                            pass
-                    logger.warning(f"GeminiProvider rate limit hit ({err_str[:120]}). Backing off {wait_sec:.1f}s (retry {attempt+1}/{max_retries})...")
-                    time.sleep(wait_sec)
+                # Immediately fail fast on 429 / quota limit so MultiFallbackProvider can switch to next provider
+                if "ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower():
+                    logger.warning(f"GeminiProvider 429 rate limit hit ({err_str[:100]}). Failing fast to next fallback provider...")
+                    raise RuntimeError(f"Gemini 429 ResourceExhausted: rate limit exceeded ({err_str[:100]})")
+                elif attempt < max_retries:
+                    time.sleep(0.2)
+                    continue
                 else:
                     raise e
 
@@ -1149,9 +1145,8 @@ class GeminiProvider(LLMProvider):
         
         import time
         start_t = time.perf_counter()
-        time.sleep(0.05)
 
-        max_retries = int(os.getenv("LLM_MAX_RETRIES", "3"))
+        max_retries = int(os.getenv("LLM_MAX_RETRIES", "1"))
         parsed_data = None
 
         if self.client:
@@ -1161,7 +1156,7 @@ class GeminiProvider(LLMProvider):
                 response_mime_type="application/json",
                 response_schema=schema_class,
             )
-            for attempt in range(max_retries):
+            for attempt in range(max_retries + 1):
                 try:
                     resp = self.client.models.generate_content(
                         model=self.model_name,
@@ -1173,16 +1168,13 @@ class GeminiProvider(LLMProvider):
                     break
                 except Exception as e:
                     err_str = str(e)
-                    if ("ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower()) and attempt < max_retries - 1:
-                        wait_sec = 8.0 * (attempt + 1)
-                        match = re.search(r'retry in\s+([\d\.]+)\s*s', err_str, re.IGNORECASE)
-                        if match:
-                            try:
-                                wait_sec = min(float(match.group(1)) + 1.0, 30.0)
-                            except Exception:
-                                pass
-                        logger.warning(f"GeminiProvider structured 429 rate limit hit. Backing off {wait_sec:.1f}s (retry {attempt+1}/{max_retries})...")
-                        time.sleep(wait_sec)
+                    # Fast failover on rate limit without waiting through multi-second sleep loops
+                    if "ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower():
+                        logger.warning(f"GeminiProvider structured 429 hit. Failing fast to next fallback provider...")
+                        raise RuntimeError(f"Gemini 429 ResourceExhausted: rate limit exceeded ({err_str[:100]})")
+                    elif attempt < max_retries:
+                        time.sleep(0.2)
+                        continue
                     else:
                         raise e
         else:
@@ -1237,7 +1229,7 @@ class GeminiProvider(LLMProvider):
             clean_schema = clean_schema_dict(inlined_schema)
             model = self.legacy_genai.GenerativeModel(self.model_name, system_instruction=system_instruction)
             
-            for attempt in range(max_retries):
+            for attempt in range(max_retries + 1):
                 try:
                     resp = model.generate_content(
                         prompt,
@@ -1247,16 +1239,12 @@ class GeminiProvider(LLMProvider):
                     break
                 except Exception as e:
                     err_str = str(e)
-                    if ("ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower()) and attempt < max_retries - 1:
-                        wait_sec = 8.0 * (attempt + 1)
-                        match = re.search(r'retry in\s+([\d\.]+)\s*s', err_str, re.IGNORECASE)
-                        if match:
-                            try:
-                                wait_sec = min(float(match.group(1)) + 1.0, 30.0)
-                            except Exception:
-                                pass
-                        logger.warning(f"GeminiProvider legacy structured 429 rate limit hit. Backing off {wait_sec:.1f}s (retry {attempt+1}/{max_retries})...")
-                        time.sleep(wait_sec)
+                    if "ResourceExhausted" in err_str or "429" in err_str or "quota" in err_str.lower():
+                        logger.warning(f"GeminiProvider legacy structured 429 hit. Failing fast to next fallback provider...")
+                        raise RuntimeError(f"Gemini 429 ResourceExhausted: rate limit exceeded ({err_str[:100]})")
+                    elif attempt < max_retries:
+                        time.sleep(0.2)
+                        continue
                     else:
                         raise e
 
@@ -1307,28 +1295,20 @@ class OpenRouterProvider(LLMProvider):
             ]
         }
         
-        max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
         timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
-        
-        response_text = ""
-        for attempt in range(max_retries + 1):
-            try:
-                with httpx.Client(timeout=timeout_sec) as client:
-                    resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
-                    if resp.status_code == 429 and attempt < max_retries:
-                        wait_sec = 2.0 * (attempt + 1)
-                        logger.warning(f"OpenRouterProvider 429 rate limit hit. Backing off {wait_sec}s...")
-                        time.sleep(wait_sec)
-                        continue
-                    resp.raise_for_status()
-                    data = resp.json()
-                    response_text = data["choices"][0]["message"]["content"] or ""
-                    break
-            except Exception as e:
-                if attempt < max_retries and ("429" in str(e) or "rate" in str(e).lower()):
-                    time.sleep(2.0 * (attempt + 1))
-                    continue
-                raise e
+        try:
+            with httpx.Client(timeout=timeout_sec) as client:
+                resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+                if resp.status_code == 429:
+                    logger.warning(f"OpenRouterProvider 429 rate limit hit. Failing fast to next provider...")
+                    raise RuntimeError(f"OpenRouter 429 RateLimit: {resp.text[:120]}")
+                resp.raise_for_status()
+                data = resp.json()
+                response_text = data["choices"][0]["message"]["content"] or ""
+        except Exception as e:
+            if "429" in str(e):
+                raise RuntimeError(f"OpenRouter 429 RateLimit: {str(e)[:120]}")
+            raise e
 
         latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
         self.last_execution_metadata = ProviderExecutionMetadata(
@@ -1365,34 +1345,23 @@ class OpenRouterProvider(LLMProvider):
             "response_format": {"type": "json_object"}
         }
         
-        max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
         timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
-        
-        parsed = None
-        for attempt in range(max_retries + 1):
-            try:
-                with httpx.Client(timeout=timeout_sec) as client:
-                    resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
-                    if resp.status_code == 429 and attempt < max_retries:
-                        wait_sec = 2.0 * (attempt + 1)
-                        logger.warning(f"OpenRouterProvider structured 429 rate limit hit. Backing off {wait_sec}s...")
-                        time.sleep(wait_sec)
-                        continue
-                    resp.raise_for_status()
-                    data = resp.json()
-                    content = data["choices"][0]["message"]["content"] or "{}"
-                    cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
-                    cleaned = re.sub(r"\s*```$", "", cleaned.strip())
-                    parsed = schema_class.model_validate_json(cleaned) if hasattr(schema_class, "model_validate_json") else schema_class.parse_raw(cleaned)
-                    break
-            except Exception as e:
-                if attempt < max_retries and ("429" in str(e) or "rate" in str(e).lower()):
-                    time.sleep(2.0 * (attempt + 1))
-                    continue
-                raise e
-
-        if parsed is None:
-            raise ValueError(f"Failed to generate structured response from OpenRouter ({self.model_name})")
+        try:
+            with httpx.Client(timeout=timeout_sec) as client:
+                resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+                if resp.status_code == 429:
+                    logger.warning(f"OpenRouterProvider structured 429 rate limit hit. Failing fast to next provider...")
+                    raise RuntimeError(f"OpenRouter 429 RateLimit: {resp.text[:120]}")
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"] or "{}"
+                cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
+                cleaned = re.sub(r"\s*```$", "", cleaned.strip())
+                parsed = schema_class.model_validate_json(cleaned) if hasattr(schema_class, "model_validate_json") else schema_class.parse_raw(cleaned)
+        except Exception as e:
+            if "429" in str(e):
+                raise RuntimeError(f"OpenRouter 429 RateLimit: {str(e)[:120]}")
+            raise e
 
         latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
         self.last_execution_metadata = ProviderExecutionMetadata(
@@ -1439,28 +1408,20 @@ class GroqProvider(LLMProvider):
             ]
         }
         
-        max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
         timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
-        
-        response_text = ""
-        for attempt in range(max_retries + 1):
-            try:
-                with httpx.Client(timeout=timeout_sec) as client:
-                    resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
-                    if resp.status_code == 429 and attempt < max_retries:
-                        wait_sec = 2.0 * (attempt + 1)
-                        logger.warning(f"GroqProvider 429 rate limit hit. Backing off {wait_sec}s...")
-                        time.sleep(wait_sec)
-                        continue
-                    resp.raise_for_status()
-                    data = resp.json()
-                    response_text = data["choices"][0]["message"]["content"] or ""
-                    break
-            except Exception as e:
-                if attempt < max_retries and ("429" in str(e) or "rate" in str(e).lower()):
-                    time.sleep(2.0 * (attempt + 1))
-                    continue
-                raise e
+        try:
+            with httpx.Client(timeout=timeout_sec) as client:
+                resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+                if resp.status_code == 429:
+                    logger.warning(f"GroqProvider 429 rate limit hit. Failing fast to next provider...")
+                    raise RuntimeError(f"Groq 429 RateLimit: {resp.text[:120]}")
+                resp.raise_for_status()
+                data = resp.json()
+                response_text = data["choices"][0]["message"]["content"] or ""
+        except Exception as e:
+            if "429" in str(e):
+                raise RuntimeError(f"Groq 429 RateLimit: {str(e)[:120]}")
+            raise e
 
         latency_ms = round((time.perf_counter() - start_t) * 1000, 2)
         self.last_execution_metadata = ProviderExecutionMetadata(
@@ -1495,31 +1456,23 @@ class GroqProvider(LLMProvider):
             "response_format": {"type": "json_object"}
         }
         
-        max_retries = int(os.getenv("LLM_MAX_RETRIES", "2"))
         timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
-        
-        parsed = None
-        for attempt in range(max_retries + 1):
-            try:
-                with httpx.Client(timeout=timeout_sec) as client:
-                    resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
-                    if resp.status_code == 429 and attempt < max_retries:
-                        wait_sec = 2.0 * (attempt + 1)
-                        logger.warning(f"GroqProvider structured 429 rate limit hit. Backing off {wait_sec}s...")
-                        time.sleep(wait_sec)
-                        continue
-                    resp.raise_for_status()
-                    data = resp.json()
-                    content = data["choices"][0]["message"]["content"] or "{}"
-                    cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
-                    cleaned = re.sub(r"\s*```$", "", cleaned.strip())
-                    parsed = schema_class.model_validate_json(cleaned) if hasattr(schema_class, "model_validate_json") else schema_class.parse_raw(cleaned)
-                    break
-            except Exception as e:
-                if attempt < max_retries and ("429" in str(e) or "rate" in str(e).lower()):
-                    time.sleep(2.0 * (attempt + 1))
-                    continue
-                raise e
+        try:
+            with httpx.Client(timeout=timeout_sec) as client:
+                resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+                if resp.status_code == 429:
+                    logger.warning(f"GroqProvider structured 429 rate limit hit. Failing fast to next provider...")
+                    raise RuntimeError(f"Groq 429 RateLimit: {resp.text[:120]}")
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"] or "{}"
+                cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
+                cleaned = re.sub(r"\s*```$", "", cleaned.strip())
+                parsed = schema_class.model_validate_json(cleaned) if hasattr(schema_class, "model_validate_json") else schema_class.parse_raw(cleaned)
+        except Exception as e:
+            if "429" in str(e):
+                raise RuntimeError(f"Groq 429 RateLimit: {str(e)[:120]}")
+            raise e
 
         if parsed is None:
             raise ValueError(f"Failed to generate structured response from Groq ({self.model_name})")
@@ -1591,9 +1544,15 @@ class MultiFallbackProvider(LLMProvider):
                 if type(provider) is MockProvider:
                     res = provider.generate_response(prompt, system_instruction, tools)
                 else:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    try:
                         future = executor.submit(provider.generate_response, prompt, system_instruction, tools)
                         res = future.result(timeout=self.timeout_seconds)
+                    finally:
+                        try:
+                            executor.shutdown(wait=False, cancel_futures=True)
+                        except TypeError:
+                            executor.shutdown(wait=False)
 
                 latency_ms = round((time.perf_counter() - overall_start_t) * 1000, 2)
                 p_meta = getattr(provider, "last_execution_metadata", None)
@@ -1633,9 +1592,15 @@ class MultiFallbackProvider(LLMProvider):
                 if type(provider) is MockProvider:
                     res = provider.generate_structured_response(prompt, system_instruction, schema_class)
                 else:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    try:
                         future = executor.submit(provider.generate_structured_response, prompt, system_instruction, schema_class)
                         res = future.result(timeout=self.timeout_seconds)
+                    finally:
+                        try:
+                            executor.shutdown(wait=False, cancel_futures=True)
+                        except TypeError:
+                            executor.shutdown(wait=False)
 
                 latency_ms = round((time.perf_counter() - overall_start_t) * 1000, 2)
                 p_meta = getattr(provider, "last_execution_metadata", None)
@@ -1681,29 +1646,34 @@ class AgentProviderRouter:
         if not provider_type:
             return None
 
+        from backend.app.config import settings
+
         if provider_type == "gemini":
-            key = os.getenv("LLM_API_KEY") or os.getenv("GEMINI_API_KEY")
-            if key:
+            key = os.environ.get("LLM_API_KEY", os.environ.get("GEMINI_API_KEY", getattr(settings, "GEMINI_API_KEY", "")))
+            if key and str(key).strip():
                 try:
-                    return GeminiProvider(api_key=key, model_name=model_name or os.getenv("GEMINI_MODEL") or os.getenv("BUYER_LLM_MODEL") or os.getenv("LLM_MODEL"))
+                    m_name = model_name or os.environ.get("LLM_MODEL", os.environ.get("GEMINI_MODEL", os.environ.get("BUYER_LLM_MODEL", getattr(settings, "GEMINI_MODEL", None))))
+                    return GeminiProvider(api_key=str(key).strip(), model_name=m_name)
                 except Exception as e:
                     logger.warning(f"Could not initialize GeminiProvider: {e}")
             return None
 
         elif provider_type == "openrouter":
-            key = os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
-            if key:
+            key = os.environ.get("LLM_API_KEY", os.environ.get("OPENROUTER_API_KEY", getattr(settings, "OPENROUTER_API_KEY", "")))
+            if key and str(key).strip():
                 try:
-                    return OpenRouterProvider(api_key=key, model_name=model_name or os.getenv("OPENROUTER_MODEL") or os.getenv("LLM_MODEL"))
+                    m_name = model_name or os.environ.get("LLM_MODEL", os.environ.get("OPENROUTER_MODEL", getattr(settings, "OPENROUTER_MODEL", None)))
+                    return OpenRouterProvider(api_key=str(key).strip(), model_name=m_name)
                 except Exception as e:
                     logger.warning(f"Could not initialize OpenRouterProvider: {e}")
             return None
 
         elif provider_type == "groq":
-            key = os.getenv("LLM_API_KEY") or os.getenv("GROQ_API_KEY")
-            if key:
+            key = os.environ.get("LLM_API_KEY", os.environ.get("GROQ_API_KEY", getattr(settings, "GROQ_API_KEY", "")))
+            if key and str(key).strip():
                 try:
-                    return GroqProvider(api_key=key, model_name=model_name or os.getenv("GROQ_MODEL") or os.getenv("LLM_MODEL"))
+                    m_name = model_name or os.environ.get("LLM_MODEL", os.environ.get("GROQ_MODEL", getattr(settings, "GROQ_MODEL", None)))
+                    return GroqProvider(api_key=str(key).strip(), model_name=m_name)
                 except Exception as e:
                     logger.warning(f"Could not initialize GroqProvider: {e}")
             return None
@@ -1718,19 +1688,24 @@ class AgentProviderRouter:
         from backend.app.config import settings
         role = role.lower()
         timeout_sec = float(os.getenv("LLM_TIMEOUT_SECONDS", str(getattr(settings, "LLM_TIMEOUT_SECONDS", 12.0))))
+        legacy_override = os.getenv("LLM_PROVIDER")
+        legacy_model = os.getenv("LLM_MODEL")
 
         if role == "buyer":
-            primary_name = os.getenv("BUYER_LLM_PROVIDER") or os.getenv("LLM_PROVIDER", settings.BUYER_LLM_PROVIDER)
-            primary_model = os.getenv("BUYER_LLM_MODEL") or os.getenv("LLM_MODEL", settings.BUYER_LLM_MODEL)
+            primary_name = os.getenv("BUYER_LLM_PROVIDER") or legacy_override or settings.BUYER_LLM_PROVIDER
+            primary_model = os.getenv("BUYER_LLM_MODEL") or legacy_model or settings.BUYER_LLM_MODEL
             fallbacks_raw = os.getenv("BUYER_LLM_FALLBACKS", settings.BUYER_LLM_FALLBACKS)
         elif role == "merchant":
-            primary_name = os.getenv("MERCHANT_LLM_PROVIDER") or os.getenv("LLM_PROVIDER", settings.MERCHANT_LLM_PROVIDER)
-            primary_model = os.getenv("MERCHANT_LLM_MODEL") or os.getenv("LLM_MODEL", settings.MERCHANT_LLM_MODEL)
+            primary_name = os.getenv("MERCHANT_LLM_PROVIDER") or legacy_override or settings.MERCHANT_LLM_PROVIDER
+            primary_model = os.getenv("MERCHANT_LLM_MODEL") or legacy_model or settings.MERCHANT_LLM_MODEL
             fallbacks_raw = os.getenv("MERCHANT_LLM_FALLBACKS", settings.MERCHANT_LLM_FALLBACKS)
         else:
-            primary_name = os.getenv("AUXILIARY_LLM_PROVIDER") or os.getenv("LLM_PROVIDER", settings.AUXILIARY_LLM_PROVIDER)
-            primary_model = os.getenv("AUXILIARY_LLM_MODEL") or os.getenv("LLM_MODEL", settings.AUXILIARY_LLM_MODEL)
+            primary_name = os.getenv("AUXILIARY_LLM_PROVIDER") or legacy_override or settings.AUXILIARY_LLM_PROVIDER
+            primary_model = os.getenv("AUXILIARY_LLM_MODEL") or legacy_model or settings.AUXILIARY_LLM_MODEL
             fallbacks_raw = os.getenv("AUXILIARY_LLM_FALLBACKS", settings.AUXILIARY_LLM_FALLBACKS)
+
+        if primary_name.lower() == "mock":
+            return MockProvider(agent_role=role)
 
         chain: List[LLMProvider] = []
         

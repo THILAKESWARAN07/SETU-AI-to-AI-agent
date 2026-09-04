@@ -665,6 +665,8 @@ def test_s10_15_provider_failure_handling(db: Session):
 def test_s10_16_mock_fallback_trigger(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.setenv("GEMINI_API_KEY", "")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    monkeypatch.setenv("GROQ_API_KEY", "")
     monkeypatch.setenv("LLM_API_KEY", "")
     monkeypatch.setenv("LLM_FALLBACK_TO_MOCK", "True")
     

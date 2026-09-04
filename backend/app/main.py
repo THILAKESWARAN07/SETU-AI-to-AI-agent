@@ -24,6 +24,7 @@ logger = logging.getLogger("setu.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import os
     # Startup: Seed the database
     db = next(get_db())
     try:
@@ -31,6 +32,33 @@ async def lifespan(app: FastAPI):
         logger.info("Database initialized and seeded.")
     except Exception as e:
         logger.error(f"Error seeding database: {e}")
+
+    # Provider-chain startup diagnostics
+    try:
+        from backend.app.agents.provider import get_provider_for_agent
+        gemini_present = bool(os.getenv("GEMINI_API_KEY") or getattr(settings, "GEMINI_API_KEY", ""))
+        groq_present = bool(os.getenv("GROQ_API_KEY") or getattr(settings, "GROQ_API_KEY", ""))
+        openrouter_present = bool(os.getenv("OPENROUTER_API_KEY") or getattr(settings, "OPENROUTER_API_KEY", ""))
+
+        buyer_p = get_provider_for_agent("buyer")
+        merchant_p = get_provider_for_agent("merchant")
+        aux_p = get_provider_for_agent("auxiliary")
+
+        buyer_chain_names = [p.provider_name for p in getattr(buyer_p, "providers", [buyer_p])]
+        merchant_chain_names = [p.provider_name for p in getattr(merchant_p, "providers", [merchant_p])]
+        aux_chain_names = [p.provider_name for p in getattr(aux_p, "providers", [aux_p])]
+
+        logger.info("=" * 60)
+        logger.info("SETU MULTI-PROVIDER AGENT ARCHITECTURE STARTUP DIAGNOSTICS")
+        logger.info(f"Keys Configured: GEMINI_API_KEY={gemini_present}, GROQ_API_KEY={groq_present}, OPENROUTER_API_KEY={openrouter_present}")
+        logger.info(f"Buyer Chain:     {' -> '.join(buyer_chain_names)}")
+        logger.info(f"Merchant Chain:  {' -> '.join(merchant_chain_names)}")
+        logger.info(f"Auxiliary Chain: {' -> '.join(aux_chain_names)}")
+        logger.info(f"Fast 429 Failover Policy: ACTIVE (zero-delay handoff to next real provider)")
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.warning(f"Could not log provider startup diagnostics: {e}")
+
     yield
 
 app = FastAPI(
