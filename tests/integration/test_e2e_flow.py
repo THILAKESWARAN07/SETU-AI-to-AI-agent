@@ -62,7 +62,7 @@ def test_complete_e2e_commerce_flow(client: TestClient, db, monkeypatch):
     negotiation_history = res_json["negotiation_history"]
     assert len(negotiation_history) == 3
     assert negotiation_history[0]["round"] == 1
-    assert Decimal(str(negotiation_history[0]["buyer_offer"]["final_amount"])) == Decimal("1800.00")
+    assert Decimal(str(negotiation_history[0]["buyer_offer"]["final_amount"])) == Decimal("1450.00")
     assert negotiation_history[1]["round"] == 2
     assert Decimal(str(negotiation_history[1]["merchant_offer"]["offered_amount"])) == Decimal("1899.00")
     assert negotiation_history[2]["round"] == 3

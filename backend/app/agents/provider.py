@@ -730,12 +730,12 @@ class MockProvider(LLMProvider):
                 else:
                     action = "OFFER"
                     product_id = 1
-                    unit_price = Decimal("1800.00")
-                    total_amount = Decimal("1800.00")
+                    unit_price = Decimal("1450.00")
+                    total_amount = Decimal("1450.00")
                     rationale = "Proposing initial buyer offer for earbuds within budget guidelines."
                     message = "Hi, I'm looking for Wireless Earbuds under my ₹2,000 budget cap. Can you offer a competitive price?"
                     basket_items = [
-                        BasketItemSchema(product_id=1, name="Wireless Earbuds Pro", quantity=1, original_price=Decimal("1599.00"), negotiated_price=Decimal("1800.00"), is_primary=True)
+                        BasketItemSchema(product_id=1, name="Wireless Earbuds Pro", quantity=1, original_price=Decimal("1599.00"), negotiated_price=Decimal("1450.00"), is_primary=True)
                     ]
 
             return BuyerDecision(

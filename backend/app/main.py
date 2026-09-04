@@ -81,28 +81,24 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/buyer/intent", response_model=schemas.IntentResponse)
 def handle_buyer_intent(request: schemas.IntentRequest, db: Session = Depends(get_db)):
-    intent_lower = request.intent.lower()
+    from backend.app.agents.tools import search_catalog_tool
+    matched = search_catalog_tool(db, query=request.intent)
+    matched_ids = [m["id"] for m in matched]
+    products = db.query(models.Product).filter(models.Product.id.in_(matched_ids), models.Product.active == True).all() if matched_ids else []
     
-    category = None
-    if "earbud" in intent_lower or "sound" in intent_lower or "audio" in intent_lower:
-        category = "Electronics"
-    elif "case" in intent_lower or "charger" in intent_lower:
-        category = "Accessories"
-    
-    products = db.query(models.Product).filter(models.Product.active == True)
-    if category:
-        products = products.filter(models.Product.category == category)
-    products = products.all()
-    
-    response_text = f"Hello! I found {len(products)} products that match your request for '{request.intent}'."
-    if "earbuds" in intent_lower and ("bundle" in intent_lower or "case" in intent_lower or "charging" in intent_lower):
-        response_text = "I highly recommend our Wireless Earbuds + Charging Case Bundle, priced at 1998 INR."
+    if products:
+        if "earbuds" in request.intent.lower() and ("case" in request.intent.lower() or "bundle" in request.intent.lower() or "charging" in request.intent.lower()):
+            response_text = f"Hello! I found {len(products)} products that match your request for '{request.intent}'. I recommend the Wireless Earbuds + Charging Case Bundle."
+        else:
+            response_text = f"Hello! I found {len(products)} products that match your request for '{request.intent}'."
+    else:
+        response_text = f"Procurement failed: No products found matching '{request.intent}'."
     
     AuditEngine.log_event(
         db=db,
         actor="BUYER_AGENT",
         action="PROCESS_INTENT",
-        result="SUCCESS",
+        result="SUCCESS" if products else "NOT_FOUND",
         reason=f"Processed buyer intent: {request.intent}",
         metadata={"buyer_id": request.buyer_id}
     )
@@ -488,7 +484,12 @@ def verify_payment(payload: schemas.PaymentVerifySchema, db: Session = Depends(g
         models.PurchaseRequest.id == tx.purchase_request_id
     ).first()
     if pr:
-        pr.status = "PAID"
+        try:
+            payments.deduct_inventory_for_paid_purchase(db, pr)
+        except ValueError as e:
+            tx.status = "FAILED"
+            db.commit()
+            raise HTTPException(status_code=400, detail=str(e))
 
     db.commit()
     db.refresh(tx)

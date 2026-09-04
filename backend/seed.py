@@ -34,7 +34,7 @@ def seed_db(db: Session):
             Product(
                 id=1,
                 name="Wireless Earbuds Pro",
-                category="Electronics",
+                category="Audio",
                 description="High-fidelity audio earbuds with active noise cancellation and spatial sound.",
                 price=Decimal("1599.00"),
                 cost=Decimal("1050.00"),
@@ -73,7 +73,7 @@ def seed_db(db: Session):
             Product(
                 id=4,
                 name="Premium Soundbar",
-                category="Electronics",
+                category="Audio",
                 description="High-end immersive theater soundbar.",
                 price=Decimal("5000.00"),
                 cost=Decimal("3500.00"),
@@ -90,7 +90,7 @@ def seed_db(db: Session):
                 description="Temporary out of stock wall charger.",
                 price=Decimal("499.00"),
                 cost=Decimal("350.00"),
-                min_selling_price=Decimal("400.00"),
+                min_selling_price=Decimal("420.00"),
                 inventory=0,
                 attributes={"brand": "SoundWave"},
                 related_product_ids=[],
@@ -99,7 +99,7 @@ def seed_db(db: Session):
             Product(
                 id=6,
                 name="Deactivated Speaker",
-                category="Electronics",
+                category="Audio",
                 description="Older active speaker - discontinued.",
                 price=Decimal("999.00"),
                 cost=Decimal("700.00"),
@@ -138,7 +138,7 @@ def seed_db(db: Session):
             Product(
                 id=9,
                 name="Wireless Earbuds Lite",
-                category="Electronics",
+                category="Audio",
                 description="Budget-friendly wireless earbuds with reliable sound.",
                 price=Decimal("999.00"),
                 cost=Decimal("600.00"),
@@ -242,15 +242,15 @@ def seed_db(db: Session):
                 active=True
             ),
 
-            # --- LAPTOPS ---
+            # --- COMPUTING ---
             Product(
                 id=21,
                 name="Budget Laptop",
-                category="Laptops",
+                category="Computing",
                 description="Daily driver laptop powered by Intel Core i3, ideal for studies and tasks.",
                 price=Decimal("29999.00"),
                 cost=Decimal("23000.00"),
-                min_selling_price=Decimal("26999.00"),
+                min_selling_price=Decimal("27499.00"),
                 inventory=8,
                 attributes={"brand": "ApexTech", "ram": "8GB", "storage": "256GB SSD"},
                 related_product_ids=[23, 24, 25, 26],
@@ -259,7 +259,7 @@ def seed_db(db: Session):
             Product(
                 id=22,
                 name="Performance Laptop",
-                category="Laptops",
+                category="Computing",
                 description="High-speed laptop powered by Intel Core i7, suited for coding, design, and work.",
                 price=Decimal("59999.00"),
                 cost=Decimal("45000.00"),
@@ -322,11 +322,11 @@ def seed_db(db: Session):
                 active=True
             ),
 
-            # --- SMARTWATCHES ---
+            # --- WEARABLES ---
             Product(
                 id=31,
                 name="Fitness Smartwatch",
-                category="Smartwatches",
+                category="Wearables",
                 description="Fitness tracker smartwatch with heart rate monitor, GPS, and custom watch faces.",
                 price=Decimal("4999.00"),
                 cost=Decimal("3000.00"),
@@ -376,7 +376,7 @@ def seed_db(db: Session):
                 active=True
             ),
 
-            # --- NEW CATEGORY: MOBILE PHONES ---
+            # --- EXPANDED CATALOG: MOBILE PHONES ---
             Product(
                 id=41,
                 name="Samsung Galaxy A15",
@@ -384,7 +384,7 @@ def seed_db(db: Session):
                 description="Reliable smartphone with vibrant display and dual camera setup.",
                 price=Decimal("12999.00"),
                 cost=Decimal("10000.00"),
-                min_selling_price=Decimal("11499.00"),
+                min_selling_price=Decimal("11799.00"),
                 inventory=15,
                 attributes={"brand": "Samsung"},
                 related_product_ids=[44, 45, 46],
@@ -397,7 +397,7 @@ def seed_db(db: Session):
                 description="Powerhouse smartphone with ultra-clear camera and fast charging.",
                 price=Decimal("16999.00"),
                 cost=Decimal("13000.00"),
-                min_selling_price=Decimal("14999.00"),
+                min_selling_price=Decimal("15499.00"),
                 inventory=12,
                 attributes={"brand": "Xiaomi"},
                 related_product_ids=[44, 45, 46],
@@ -410,7 +410,7 @@ def seed_db(db: Session):
                 description="Sleek performance smartphone with long battery backup.",
                 price=Decimal("14999.00"),
                 cost=Decimal("11500.00"),
-                min_selling_price=Decimal("13499.00"),
+                min_selling_price=Decimal("13699.00"),
                 inventory=10,
                 attributes={"brand": "Motorola"},
                 related_product_ids=[44, 45, 46],
@@ -456,7 +456,7 @@ def seed_db(db: Session):
                 active=True
             ),
 
-            # --- NEW CATEGORY: AUDIO ---
+            # --- EXPANDED CATALOG: AUDIO ---
             Product(
                 id=47,
                 name="Wireless Earbuds",
@@ -523,7 +523,7 @@ def seed_db(db: Session):
                 active=True
             ),
 
-            # --- NEW CATEGORY: COMPUTING ---
+            # --- EXPANDED CATALOG: COMPUTING ---
             Product(
                 id=52,
                 name="Wireless Keyboard",
@@ -534,7 +534,7 @@ def seed_db(db: Session):
                 min_selling_price=Decimal("1199.00"),
                 inventory=20,
                 attributes={"brand": "ApexTech"},
-                related_product_ids=[53, 54, 55],
+                related_product_ids=[53, 55],
                 active=True
             ),
             Product(
@@ -547,7 +547,7 @@ def seed_db(db: Session):
                 min_selling_price=Decimal("599.00"),
                 inventory=30,
                 attributes={"brand": "ApexTech"},
-                related_product_ids=[52, 54, 55],
+                related_product_ids=[52, 55],
                 active=True
             ),
             Product(
@@ -560,7 +560,7 @@ def seed_db(db: Session):
                 min_selling_price=Decimal("1499.00"),
                 inventory=18,
                 attributes={"brand": "ApexTech"},
-                related_product_ids=[52, 53, 55],
+                related_product_ids=[21, 22],
                 active=True
             ),
             Product(
@@ -573,11 +573,11 @@ def seed_db(db: Session):
                 min_selling_price=Decimal("799.00"),
                 inventory=25,
                 attributes={"brand": "ApexTech"},
-                related_product_ids=[52, 53, 54],
+                related_product_ids=[52, 53],
                 active=True
             ),
 
-            # --- NEW CATEGORY: WEARABLES ---
+            # --- EXPANDED CATALOG: WEARABLES ---
             Product(
                 id=56,
                 name="Smartwatch",

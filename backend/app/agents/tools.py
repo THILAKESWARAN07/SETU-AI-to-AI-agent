@@ -43,6 +43,8 @@ class ToolRegistry:
         return func(db, **kwargs)
 
 
+import re
+
 # --- CONCRETE AGENT TOOLS ---
 
 def search_catalog_tool(db: Session, query: Optional[str] = None, category: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -52,14 +54,20 @@ def search_catalog_tool(db: Session, query: Optional[str] = None, category: Opti
     db_query = db.query(Product).filter(Product.active == True)
     if category:
         category_lower = category.lower()
-        if category_lower in ["mobile phones", "mobile", "phones", "smartphones"]:
+        if category_lower in ["mobile phones", "mobile", "phones", "smartphones", "phone"]:
             db_query = db_query.filter(Product.category.in_(["Mobile Phones", "MOBILE PHONES"]))
         elif category_lower in ["audio", "sound", "headphones", "earbuds", "earphones"]:
-            db_query = db_query.filter(Product.category.in_(["Audio", "AUDIO", "Electronics", "Accessories"]))
-        elif category_lower in ["computing", "laptops", "computers"]:
+            db_query = db_query.filter(Product.category.in_(["Audio", "AUDIO", "Electronics"]))
+        elif category_lower in ["electronics", "electronic"]:
+            db_query = db_query.filter(Product.category.in_(["Audio", "Computing", "Mobile Phones", "Wearables", "Accessories", "Electronics"]))
+        elif category_lower in ["computing", "laptops", "computers", "laptop"]:
             db_query = db_query.filter(Product.category.in_(["Computing", "COMPUTING", "Laptops"]))
-        elif category_lower in ["wearables", "smartwatches", "watches"]:
+        elif category_lower in ["wearables", "smartwatches", "watches", "wearable", "smartwatch"]:
             db_query = db_query.filter(Product.category.in_(["Wearables", "WEARABLES", "Smartwatches"]))
+        elif category_lower in ["accessories", "accessory"]:
+            db_query = db_query.filter(Product.category.in_(["Accessories", "ACCESSORIES"]))
+        elif category_lower in ["bundles", "bundle"]:
+            db_query = db_query.filter(Product.category.in_(["Bundles", "BUNDLES"]))
         else:
             db_query = db_query.filter(Product.category.ilike(category))
             
@@ -68,6 +76,11 @@ def search_catalog_tool(db: Session, query: Optional[str] = None, category: Opti
     if query:
         query_lower = query.lower()
         matched_products = []
+        
+        # Stop words to ignore during word-level matching
+        stop_words = {"i", "want", "looking", "for", "a", "an", "the", "my", "to", "buy", "need", "get", "please", "can", "you", "recommend", "under", "around", "about", "budget", "of", "rs", "inr", "is", "with", "max", "maximum", "limit", "cap"}
+        query_tokens = [w for w in re.findall(r'\b[a-z0-9]+\b', query_lower) if w not in stop_words]
+
         for p in products:
             name_lower = p.name.lower()
             desc_lower = (p.description or "").lower()
@@ -80,27 +93,35 @@ def search_catalog_tool(db: Session, query: Optional[str] = None, category: Opti
                 continue
 
             # 2. Smartwatch / Wearables alias
-            if "smartwatch" in query_lower or "watch strap" in query_lower or "wearable" in query_lower:
+            if "smartwatch" in query_lower or "watch strap" in query_lower or "wearable" in query_lower or ("watch" in query_lower and "soundbar" not in query_lower):
                 if cat_lower in ["wearables", "smartwatches"] or "smartwatch" in name_lower or "watch" in name_lower or "strap" in name_lower:
                     matched_products.append(p)
                 continue
 
             # 3. Smartphone / Phone alias
-            if "phone" in query_lower or "mobile" in query_lower or "smartphone" in query_lower or "galaxy" in query_lower or "redmi" in query_lower or "motorola" in query_lower:
-                if cat_lower == "mobile phones" or "phone" in name_lower or "galaxy" in name_lower or "redmi" in name_lower or "motorola" in name_lower or (cat_lower == "accessories" and any(rid in [11, 12, 41, 42, 43] for rid in (p.related_product_ids or []))):
+            if "phone" in query_lower or "mobile" in query_lower or "smartphone" in query_lower or "galaxy" in query_lower or "redmi" in query_lower or "motorola" in query_lower or "samsung" in query_lower:
+                if cat_lower == "mobile phones" or "phone" in name_lower or "galaxy" in name_lower or "redmi" in name_lower or "motorola" in name_lower or "samsung" in name_lower or (cat_lower == "accessories" and any(rid in [11, 12, 41, 42, 43] for rid in (p.related_product_ids or []))):
                     matched_products.append(p)
                 continue
                 
             # 4. Earphones / Earbuds / Audio alias
-            if "earphone" in query_lower or "earbud" in query_lower or "headphone" in query_lower:
-                if "earbud" in name_lower or "earphone" in name_lower or "charging case" in name_lower or "protective case" in name_lower or (cat_lower in ["audio", "electronics"] and "speaker" not in name_lower):
+            if "earphone" in query_lower or "earbud" in query_lower or "headphone" in query_lower or "soundbar" in query_lower or "speaker" in query_lower:
+                if "earbud" in name_lower or "earphone" in name_lower or "soundbar" in name_lower or "speaker" in name_lower or "charging case" in name_lower or "protective case" in name_lower or cat_lower in ["audio", "electronics"]:
                     matched_products.append(p)
                 continue
 
-            # Default keyword match
+            # 5. Computing / Keyboards / Mouse
+            if "keyboard" in query_lower or "mouse" in query_lower or "backpack" in query_lower or "hub" in query_lower or "laptop" in query_lower:
+                if "keyboard" in name_lower or "mouse" in name_lower or "backpack" in name_lower or "hub" in name_lower or "laptop" in name_lower or cat_lower in ["computing", "laptops"]:
+                    matched_products.append(p)
+                continue
+
+            # Default direct keyword match
             if (query_lower in name_lower or 
                 query_lower in desc_lower or 
                 query_lower in cat_lower):
+                matched_products.append(p)
+            elif query_tokens and any(t in name_lower for t in query_tokens):
                 matched_products.append(p)
                 
         products = matched_products

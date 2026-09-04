@@ -72,43 +72,57 @@ class MerchantPricingStrategy:
     def generate_bundle_prescription(
         primary_prod: Dict[str, Any],
         related_prods: List[Dict[str, Any]],
-        buyer_max_budget: Optional[Decimal] = None
+        buyer_max_budget: Optional[Decimal] = None,
+        min_margin_percent: Decimal = Decimal("15.00")
     ) -> Optional[Dict[str, Any]]:
         """
         Generates a profitable bundle prescription containing complementary accessories with bundle discounts.
+        Ensures EVERY individual basket item satisfies its own effective price floor and minimum margin.
         """
         if not related_prods:
             return None
 
         # Calculate combined list price and cost
-        total_list = Decimal(str(primary_prod.get("price", "0.00")))
-        total_cost = Decimal(str(primary_prod.get("cost", "0.00")))
-        total_min_sp = Decimal(str(primary_prod.get("min_selling_price") or primary_prod.get("cost", "0.00")))
+        primary_price = Decimal(str(primary_prod.get("price", "0.00")))
+        primary_cost = Decimal(str(primary_prod.get("cost", "0.00")))
+        primary_min_sp = Decimal(str(primary_prod.get("min_selling_price") or primary_prod.get("cost", "0.00")))
+
+        margin_factor = Decimal("1.00") - (min_margin_percent / Decimal("100.00"))
+        primary_floor = max(primary_min_sp, primary_cost / margin_factor, primary_cost).quantize(Decimal("0.01"))
+        
+        # Primary bundle discount (up to 8% discount, but bounded strictly by primary item floor)
+        primary_discounted_price = max(primary_floor, (primary_price * Decimal("0.92")).quantize(Decimal("0.01")))
 
         bundle_items = [
             {
                 "product_id": primary_prod["id"],
                 "name": primary_prod["name"],
                 "quantity": 1,
-                "original_price": Decimal(str(primary_prod["price"])),
-                "negotiated_price": Decimal(str(primary_prod["price"])),
-                "is_primary": True
+                "original_price": primary_price,
+                "negotiated_price": primary_discounted_price,
+                "is_primary": True,
+                "cost": primary_cost,
+                "effective_floor": primary_floor
             }
         ]
 
-        # Add up to 3 complementary accessories
+        total_list = primary_price
+        total_cost = primary_cost
+
+        # Add up to 3 complementary accessories with valid inventory
         for acc in related_prods[:3]:
             if acc.get("inventory", 0) > 0 and acc.get("active", True):
                 acc_price = Decimal(str(acc["price"]))
                 acc_cost = Decimal(str(acc.get("cost", "0.00")))
                 acc_min_sp = Decimal(str(acc.get("min_selling_price") or acc.get("cost", "0.00")))
                 
+                acc_floor = max(acc_min_sp, acc_cost / margin_factor, acc_cost).quantize(Decimal("0.01"))
+                
+                # Apply a healthy 15-20% bundle discount on accessory while protecting individual margin floor
+                discounted_acc_price = max(acc_floor, (acc_price * Decimal("0.80")).quantize(Decimal("0.01")))
+
                 total_list += acc_price
                 total_cost += acc_cost
-                total_min_sp += acc_min_sp
-
-                # Apply a healthy 15-20% bundle discount on accessory while protecting margin
-                discounted_acc_price = max(acc_min_sp, acc_price * Decimal("0.80")).quantize(Decimal("0.01"))
 
                 bundle_items.append({
                     "product_id": acc["id"],
@@ -116,15 +130,15 @@ class MerchantPricingStrategy:
                     "quantity": 1,
                     "original_price": acc_price,
                     "negotiated_price": discounted_acc_price,
-                    "is_primary": False
+                    "is_primary": False,
+                    "cost": acc_cost,
+                    "effective_floor": acc_floor
                 })
 
-        # Apply primary product bundle discount
-        primary_bundle_price = max(total_min_sp - sum(item["negotiated_price"] for item in bundle_items[1:]), primary_prod["price"] * Decimal("0.92")).quantize(Decimal("0.01"))
-        bundle_items[0]["negotiated_price"] = primary_bundle_price
-
-        bundle_total = sum(item["negotiated_price"] for item in bundle_items)
-        bundle_discount = total_list - bundle_total
+        # Calculate exact sum of all item negotiated prices
+        bundle_total = sum(item["negotiated_price"] for item in bundle_items).quantize(Decimal("0.01"))
+        bundle_discount = (total_list - bundle_total).quantize(Decimal("0.01"))
+        margin_percent = (((bundle_total - total_cost) / bundle_total) * Decimal("100")).quantize(Decimal("0.01")) if bundle_total > Decimal("0") else Decimal("0.00")
 
         return {
             "bundle_items": bundle_items,
@@ -132,5 +146,5 @@ class MerchantPricingStrategy:
             "bundle_total": bundle_total,
             "discount_amount": bundle_discount,
             "total_cost": total_cost,
-            "margin_percent": (((bundle_total - total_cost) / bundle_total) * Decimal("100")).quantize(Decimal("0.01")) if bundle_total > Decimal("0") else Decimal("0.00")
+            "margin_percent": margin_percent
         }

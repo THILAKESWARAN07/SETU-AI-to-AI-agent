@@ -20,37 +20,81 @@ from backend.app.agents.tools import (
 logger = logging.getLogger("setu.agents.orchestrator")
 
 def parse_budget_intent(intent: str, configured_budget: Decimal) -> Dict[str, Any]:
-    intent_lower = intent.lower()
-    target_budget = configured_budget
-    maximum_budget = configured_budget
-    is_flexible = False
-    standalone_preferred = any(w in intent_lower for w in ["standalone", "only want", "without accessories", "no accessories", "phone alone", "just the"])
-    accessories_wanted = any(w in intent_lower for w in ["accessory", "accessories", "charger", "case", "glass", "strap", "bundle"])
+    intent_lower = intent.lower() if intent else ""
+    # Normalize comma separated numbers e.g. "12,000" -> "12000"
+    intent_clean = re.sub(r'(\d),(\d)', r'\1\2', intent_lower)
+    
+    # Standalone vs accessory preferences
+    standalone_preferred = any(w in intent_lower for w in [
+        "standalone", "only want", "without accessories", "no accessories", 
+        "phone alone", "just the", "alone", "without bundle", "no bundle"
+    ])
+    accessories_wanted = any(w in intent_lower for w in [
+        "accessory", "accessories", "charger", "case", "glass", "strap", "bundle", "with"
+    ])
 
-    if "stretch to" in intent_lower or "can stretch" in intent_lower or "up to" in intent_lower:
+    # Shorthand & explicit amount extraction
+    # Patterns like "12k", "15k", "1.5k", "12000", "₹12000"
+    def _extract_amount(match_obj):
+        if not match_obj:
+            return None
+        try:
+            num_str = match_obj.group(1).replace(",", "")
+            val = Decimal(num_str)
+            if match_obj.group(2) and match_obj.group(2).lower() in ["k", "thousand"]:
+                val = val * Decimal("1000")
+            return val.quantize(Decimal("0.01"))
+        except Exception:
+            return None
+
+    # Check for stretch phrases: "can stretch to 15k", "stretch up to 15000", "up to 15k"
+    stretch_match = re.search(r'(?:stretch to|can stretch to|stretch up to|stretch)\s*(?:₹|rs\.?|inr)?\s*([\d]+(?:\.[\d]+)?)\s*(k|thousand)?', intent_clean)
+    parsed_stretch = _extract_amount(stretch_match)
+
+    # Check for strict budget phrases
+    is_strict_phrase = any(w in intent_lower for w in [
+        "maximum", "cannot spend more than", "not above", "hard limit", 
+        "strict", "strict budget", "max", "budget cap", "under", "cap", "no more than"
+    ])
+
+    # Check for flexible budget phrases
+    is_flexible_phrase = any(w in intent_lower for w in [
+        "around", "about", "near", "roughly", "approx", "up to around", 
+        "can stretch", "stretch to", "flexible"
+    ])
+
+    # Check if a target budget is stated inside the intent text (e.g. "budget is 12000", "around 12k", "max 15k")
+    target_match = re.search(r'(?:budget(?:\s+is|\s+of|\s+around|\s+limit)?|around|about|near|roughly|max(?:imum)?|under|cap|limit)\s*(?:₹|rs\.?|inr)?\s*([\d]+(?:\.[\d]+)?)\s*(k|thousand)?', intent_clean)
+    parsed_target = _extract_amount(target_match)
+    
+    target_budget = parsed_target if (parsed_target and parsed_target > Decimal("0")) else configured_budget
+    maximum_budget = target_budget
+
+    if parsed_stretch and parsed_stretch >= target_budget:
+        budget_type = "flexible"
         is_flexible = True
-        match = re.search(r'(?:stretch to|up to|max(?:imum)?)\s*(?:₹|rs\.?|inr)?\s*([\d,]+)', intent_lower)
-        if match:
-            try:
-                num_str = match.group(1).replace(",", "")
-                parsed_max = Decimal(num_str)
-                if parsed_max > target_budget:
-                    maximum_budget = parsed_max
-            except Exception:
-                maximum_budget = (target_budget * Decimal("1.10")).quantize(Decimal("0.01"))
-        else:
-            maximum_budget = (target_budget * Decimal("1.10")).quantize(Decimal("0.01"))
-    elif "around" in intent_lower or "approx" in intent_lower:
+        maximum_budget = parsed_stretch
+    elif is_flexible_phrase:
+        budget_type = "flexible"
         is_flexible = True
         maximum_budget = (target_budget * Decimal("1.08")).quantize(Decimal("0.01"))
-    elif "under" in intent_lower or "strict" in intent_lower or "maximum" in intent_lower or "cap" in intent_lower:
+    elif is_strict_phrase:
+        budget_type = "strict"
         is_flexible = False
         maximum_budget = target_budget
+    else:
+        budget_type = "unspecified"
+        is_flexible = False
+        maximum_budget = target_budget
+
+    flexibility_amount = (maximum_budget - target_budget).quantize(Decimal("0.01")) if maximum_budget > target_budget else Decimal("0.00")
 
     return {
         "target_budget": target_budget,
         "maximum_budget": maximum_budget,
+        "budget_type": budget_type,
         "is_flexible": is_flexible,
+        "flexibility_amount": flexibility_amount,
         "standalone_preferred": standalone_preferred,
         "accessories_wanted": accessories_wanted
     }
@@ -195,12 +239,21 @@ class NegotiationOrchestrator:
 
         # 2. Buyer Agent Intent Parsing & Catalog Search
         # Call search_catalog tool
-        search_results = search_catalog_tool(self.db, query=intent)
-        if not search_results:
+        intent_clean = intent.strip() if intent else ""
+        if intent_clean:
+            search_results = search_catalog_tool(self.db, query=intent_clean)
+            if not search_results:
+                raise NegotiationError(
+                    f"Procurement failed: No products found matching '{intent}'.", 
+                    build_failed_result([f"Procurement failed: No products found matching '{intent}'."])
+                )
+        else:
             search_results = search_catalog_tool(self.db)
-            
-        if not search_results:
-            raise NegotiationError("Procurement failed: No items found in catalog matching search parameters.", build_failed_result(["Procurement failed: No items found in catalog matching search parameters."]))
+            if not search_results:
+                raise NegotiationError(
+                    "Procurement failed: No items found in catalog matching search parameters.", 
+                    build_failed_result(["Procurement failed: No items found in catalog matching search parameters."])
+                )
 
         intent_lower = intent.lower()
         candidate_prod = search_results[0]
@@ -735,8 +788,8 @@ class NegotiationOrchestrator:
                     break
 
                 elif buyer_decision.action == "ACCEPT":
-                    # Double check budget constraint
-                    final_budget_eval = evaluate_budget_tool(self.db, str(latest_merchant_counter.total_amount), str(budget))
+                    # Double check budget constraint against effective maximum budget
+                    final_budget_eval = evaluate_budget_tool(self.db, str(latest_merchant_counter.total_amount), str(effective_max_budget))
                     
                     # Log POLICY_CHECK
                     AuditEngine.log_event(
@@ -744,7 +797,7 @@ class NegotiationOrchestrator:
                         actor="SYSTEM",
                         action="POLICY_CHECK",
                         result="SUCCESS" if final_budget_eval["within_budget"] else "FAIL",
-                        reason=f"Buyer acceptance budget check. Budget: ₹{budget}. Final: ₹{latest_merchant_counter.total_amount}"
+                        reason=f"Buyer acceptance budget check. Max Budget: ₹{effective_max_budget}. Final: ₹{latest_merchant_counter.total_amount}"
                     )
                     
                     memory.add_policy_verdict(
@@ -809,7 +862,7 @@ class NegotiationOrchestrator:
 
                 else:  # COUNTER
                     # Enforce budget limits
-                    counter_budget_eval = evaluate_budget_tool(self.db, str(buyer_decision.total_amount), str(budget))
+                    counter_budget_eval = evaluate_budget_tool(self.db, str(buyer_decision.total_amount), str(effective_max_budget))
                     
                     # Log POLICY_CHECK
                     AuditEngine.log_event(
@@ -817,7 +870,7 @@ class NegotiationOrchestrator:
                         actor="SYSTEM",
                         action="POLICY_CHECK",
                         result="SUCCESS" if counter_budget_eval["within_budget"] else "FAIL",
-                        reason=f"Buyer counter budget check. Budget: ₹{budget}. Counter: ₹{buyer_decision.total_amount}"
+                        reason=f"Buyer counter budget check. Max Budget: ₹{effective_max_budget}. Counter: ₹{buyer_decision.total_amount}"
                     )
                     
                     memory.add_policy_verdict(

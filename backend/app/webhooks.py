@@ -3,7 +3,7 @@ import logging
 from decimal import Decimal
 from sqlalchemy.orm import Session
 
-from backend.app.payments import get_payment_adapter
+from backend.app.payments import get_payment_adapter, deduct_inventory_for_paid_purchase
 from backend.app.models import Transaction, PurchaseRequest, ProcessedWebhookEvent
 from backend.app.audit import AuditEngine
 
@@ -162,12 +162,26 @@ class WebhookProcessor:
         transaction.razorpay_payment_id = payment_id
         transaction.razorpay_signature = signature
         
-        # Mark associated purchase request as PAID
+        # Mark associated purchase request as PAID and deduct inventory
         purchase_request = db.query(PurchaseRequest).filter(
             PurchaseRequest.id == transaction.purchase_request_id
         ).first()
         if purchase_request:
-            purchase_request.status = "PAID"
+            try:
+                deduct_inventory_for_paid_purchase(db, purchase_request)
+            except Exception as e:
+                logger.error(f"Inventory deduction failed during webhook processing: {e}")
+                AuditEngine.log_event(
+                    db=db,
+                    actor="WEBHOOK",
+                    action="PROCESS_WEBHOOK",
+                    result="FAIL",
+                    reason=f"Payment received but inventory deduction failed: {str(e)}",
+                    entity_type="Transaction",
+                    entity_id=transaction.id,
+                    metadata={"event_id": event_id, "error": str(e)}
+                )
+                return {"status": "error", "message": str(e)}
 
         # Register event ID as processed
         processed_evt = ProcessedWebhookEvent(id=event_id)

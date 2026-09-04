@@ -8,7 +8,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from backend.app.config import settings
-from backend.app.models import PurchaseRequest, PolicyDecision, Transaction
+from backend.app.models import PurchaseRequest, PolicyDecision, Transaction, Product
 from backend.app.audit import AuditEngine
 
 logger = logging.getLogger("setu.payments")
@@ -310,4 +310,103 @@ def process_payment_creation(db: Session, purchase_request_id: int) -> Transacti
         )
 
         return tx
+
+
+def deduct_inventory_for_paid_purchase(db: Session, purchase_request: PurchaseRequest) -> bool:
+    """
+    Centralized, atomic, and idempotent inventory deduction service for confirmed payments.
+    - Deducts inventory ONLY after confirmed payment.
+    - Idempotent: if purchase_request.status == "PAID", does not double-deduct.
+    - Uses db row-locking (.with_for_update()) and process-level lock to prevent concurrency races.
+    - Verifies sufficient inventory exists before deducting every item in basket.
+    - Never allows negative inventory.
+    - Updates purchase_request.status = "PAID".
+    """
+    with _payment_lock:
+        # Re-query purchase request with lock to verify fresh state
+        pr = db.query(PurchaseRequest).filter(
+            PurchaseRequest.id == purchase_request.id
+        ).with_for_update().first()
+
+        if not pr:
+            raise ValueError(f"Purchase request ID {purchase_request.id} not found.")
+
+        # Idempotency check: If already marked PAID, inventory was already deducted
+        if pr.status == "PAID":
+            logger.info(f"Idempotency Guard: Inventory already deducted for PurchaseRequest {pr.id} (status is already PAID).")
+            return True
+
+        # Extract items to decrement
+        items_to_deduct = []
+        if pr.basket and isinstance(pr.basket, dict) and "items" in pr.basket:
+            for item in pr.basket["items"]:
+                items_to_deduct.append({
+                    "product_id": int(item["product_id"]),
+                    "quantity": int(item.get("quantity", 1)),
+                    "name": item.get("name", "Product")
+                })
+        else:
+            # Fallback for legacy single-item purchase requests
+            items_to_deduct.append({
+                "product_id": pr.product_id,
+                "quantity": pr.quantity,
+                "name": pr.product.name if pr.product else "Product"
+            })
+
+        # Phase 1: Lock products and verify all items have sufficient stock
+        products_to_update = []
+        for item in items_to_deduct:
+            prod = db.query(Product).filter(
+                Product.id == item["product_id"]
+            ).with_for_update().first()
+
+            if not prod:
+                AuditEngine.log_event(
+                    db=db,
+                    actor="SYSTEM",
+                    action="DEDUCT_INVENTORY",
+                    result="FAIL",
+                    reason=f"Product ID {item['product_id']} not found during inventory deduction.",
+                    entity_type="PurchaseRequest",
+                    entity_id=pr.id
+                )
+                raise ValueError(f"Product ID {item['product_id']} not found in catalog.")
+
+            if prod.inventory < item["quantity"]:
+                AuditEngine.log_event(
+                    db=db,
+                    actor="SYSTEM",
+                    action="DEDUCT_INVENTORY",
+                    result="BLOCKED",
+                    reason=f"Insufficient inventory for product '{prod.name}' (ID {prod.id}): requested {item['quantity']}, available {prod.inventory}.",
+                    entity_type="Product",
+                    entity_id=prod.id,
+                    metadata={"available": prod.inventory, "requested": item["quantity"]}
+                )
+                raise ValueError(f"Insufficient inventory for product '{prod.name}': requested {item['quantity']}, available {prod.inventory}.")
+
+            products_to_update.append((prod, item["quantity"]))
+
+        # Phase 2: Decrement inventory safely
+        for prod, qty in products_to_update:
+            prod.inventory -= qty
+            logger.info(f"[INVENTORY DEDUCTION] Decremented {qty} units from product '{prod.name}' (ID {prod.id}). Remaining inventory: {prod.inventory}")
+
+        # Mark purchase request as PAID
+        pr.status = "PAID"
+        db.commit()
+
+        AuditEngine.log_event(
+            db=db,
+            actor="SYSTEM",
+            action="DEDUCT_INVENTORY",
+            result="SUCCESS",
+            reason=f"Successfully deducted inventory for PurchaseRequest ID {pr.id}.",
+            entity_type="PurchaseRequest",
+            entity_id=pr.id,
+            metadata={"items_deducted": [{"product_id": p.id, "deducted": q, "remaining": p.inventory} for p, q in products_to_update]}
+        )
+
+        return True
+
 
