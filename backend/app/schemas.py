@@ -216,3 +216,83 @@ class AttackTestResponse(BaseModel):
     reason: str
     decision: Optional[str] = None
     details: Dict[str, Any]
+
+
+# --- E2E DEMO COMMERCE SCHEMAS ---
+from enum import Enum
+
+class NegotiationStage(str, Enum):
+    INTENT_PARSE = "INTENT_PARSE"
+    CATALOG_SEARCH = "CATALOG_SEARCH"
+    BUYER_TURN = "BUYER_TURN"
+    MERCHANT_TURN = "MERCHANT_TURN"
+    BUNDLE_EVALUATION = "BUNDLE_EVALUATION"
+    POLICY_VALIDATION = "POLICY_VALIDATION"
+    FINAL_BASKET_VALIDATION = "FINAL_BASKET_VALIDATION"
+    NEGOTIATION_SNAPSHOT = "NEGOTIATION_SNAPSHOT"
+    PURCHASE_REQUEST_CREATION = "PURCHASE_REQUEST_CREATION"
+    CHECKOUT_ORDER_CREATION = "CHECKOUT_ORDER_CREATION"
+    PAYMENT = "PAYMENT"
+    PAYMENT_VERIFICATION = "PAYMENT_VERIFICATION"
+
+
+class DemoCommerceRequest(BaseModel):
+    buyer_id: str
+    intent: str
+    budget: Decimal = Decimal("2000.00")
+
+
+class DemoCommerceResponse(BaseModel):
+    buyer_id: str = "demo-buyer-001"
+    intent: str = ""
+    catalog_search_results: List[Dict[str, Any]] = Field(default_factory=list)
+    selected_product_id: int = 1
+    cross_sell_product_id: int = 0
+    bundle_offer: Dict[str, Any] = Field(default_factory=dict)
+    negotiation_history: List[Dict[str, Any]] = Field(default_factory=list)
+    conversation_events: List[Dict[str, Any]] = Field(default_factory=list)
+    purchase_request_id: int = 0
+    decision: str = "REJECTED"
+    reasons: List[str] = Field(default_factory=list)
+    original_amount: str = "0.00"
+    final_amount: str = "0.00"
+    discount_percent: str = "0.00"
+    margin_percent: str = "0.00"
+    policy_version: str = "policy_v1.0"
+    basket: Optional[Dict[str, Any]] = None
+    basket_type: Optional[str] = "STANDALONE"
+    selected_basket_type: Optional[str] = "STANDALONE"
+    financials: Optional[Dict[str, Any]] = None
+
+    # Structured Proposal and Offer Lifecycle
+    buyer_opening_offer: Optional[Dict[str, Any]] = None
+    merchant_standalone_counter: Optional[Dict[str, Any]] = None
+    merchant_bundle_proposal: Optional[Dict[str, Any]] = None
+    proposals: List[Dict[str, Any]] = Field(default_factory=list)
+    accepted_proposal_id: Optional[str] = None
+
+    # Trace variables
+    agent_mode: str = "OFFLINE MOCK"
+    buyer_objective: str = "Optimize bundle pricing & enforce budget limits"
+    buyer_tools_used: List[str] = Field(default_factory=list)
+    buyer_confidence: float = 1.0
+    merchant_objective: str = "Maximize sales margins & bundle volume conversion"
+    merchant_tools_used: List[str] = Field(default_factory=list)
+    merchant_confidence: float = 1.0
+
+    provider_summary: Optional[Dict[str, Any]] = None
+
+    # Stage & Error tracking
+    stage: Optional[str] = None
+    error_code: Optional[str] = None
+    status: Optional[str] = "success"
+
+    # Step 12 metadata
+    provider: str = "MockProvider"
+    model: str = "mock-model-v2"
+    execution_mode: str = "OFFLINE MOCK"
+    session_id: str = "session_mock"
+    agent_role: str = "BUYER_AGENT & MERCHANT_AGENT"
+    start_time: str = ""
+    completion_time: str = ""
+

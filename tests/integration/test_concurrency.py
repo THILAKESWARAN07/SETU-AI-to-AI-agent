@@ -59,14 +59,11 @@ def test_concurrent_payment_creation_is_serialized(client, db, monkeypatch):
         results = [f.result() for f in futures]
         
     # 4. Assert response statuses
-    # One request must succeed (200), and the other must cleanly fail (400) because the transaction already exists.
+    # Both concurrent requests must safely succeed with 200 (idempotent), returning the same Razorpay order.
     status_codes = [r.status_code for r in results]
-    assert 200 in status_codes
-    assert 400 in status_codes
-    
-    # Locate the error response
-    fail_res = next(r for r in results if r.status_code == 400).json()
-    assert "already exists" in fail_res["detail"]
+    assert all(code == 200 for code in status_codes)
+    order_ids = [r.json()["razorpay_order_id"] for r in results]
+    assert order_ids[0] == order_ids[1]
     
     # 5. Verify database and mock constraints
     # Check that create_order was called EXACTLY once

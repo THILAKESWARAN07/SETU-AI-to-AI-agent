@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional, Callable
 from sqlalchemy.orm import Session
 
+from backend.app.schemas import NegotiationStage
 from backend.app.models import Product, MerchantPolicy
 from backend.app.audit import AuditEngine
 from backend.app.policy import PolicyEngine
@@ -269,6 +270,7 @@ class NegotiationOrchestrator:
             }
 
         current_status = "IN_PROGRESS"
+        current_stage = NegotiationStage.INTENT_PARSE
         final_decision_pr_id = None
         final_price = None
         selected_product_id = None
@@ -281,7 +283,7 @@ class NegotiationOrchestrator:
         merchant_bundle_proposal_record = None
         accepted_proposal_id = None
 
-        def build_failed_result(reasons, final_price_val=None, decision_val="BLOCKED", execution_mode_override=None):
+        def build_failed_result(reasons, final_price_val=None, decision_val="BLOCKED", execution_mode_override=None, error_code=None):
             prod_id = selected_product_id or 1
             original_amt_str = "0.00"
             if selected_product_id:
@@ -335,6 +337,11 @@ class NegotiationOrchestrator:
                 "merchant_objective": memory.merchant_goal,
                 "merchant_tools_used": list(self.merchant.tools_called_in_session),
                 "merchant_confidence": self.merchant.last_confidence,
+                
+                # Stage & Error tracking
+                "stage": current_stage.value if hasattr(current_stage, "value") else str(current_stage),
+                "error_code": error_code or ("POLICY_REJECTED" if decision_val == "BLOCKED" else "NEGOTIATION_FAILED"),
+                "status": "failed",
                 
                 # Step 12 metadata
                 "provider": provider_name,
@@ -846,18 +853,28 @@ class NegotiationOrchestrator:
                 )
 
             # Ensure basket_items is populated on merchant decision
-            if merchant_decision.action != "REJECT" and not getattr(merchant_decision, "basket_items", None):
-                p_obj = self.db.query(Product).filter(Product.id == merchant_decision.product_id).first()
-                merchant_decision.basket_items = [
+            p_obj_cur = self.db.query(Product).filter(Product.id == selected_product_id).first()
+            valid_m_items = []
+            for item in (getattr(merchant_decision, "basket_items", None) or []):
+                if isinstance(item, BasketItemSchema):
+                    valid_m_items.append(item)
+                elif isinstance(item, dict):
+                    try:
+                        valid_m_items.append(BasketItemSchema.model_validate(item))
+                    except Exception:
+                        pass
+            if not valid_m_items and merchant_decision.action != "REJECT":
+                valid_m_items = [
                     BasketItemSchema(
-                        product_id=merchant_decision.product_id,
-                        name=p_obj.name if p_obj else "Product",
-                        quantity=merchant_decision.quantity,
-                        original_price=p_obj.price if p_obj else merchant_decision.unit_price,
-                        negotiated_price=merchant_decision.unit_price,
+                        product_id=selected_product_id,
+                        name=prod_details["name"] if prod_details else "Product",
+                        quantity=1,
+                        original_price=prod_details["price"] if prod_details else Decimal("1000"),
+                        negotiated_price=merchant_decision.total_amount if isinstance(merchant_decision.total_amount, Decimal) else (prod_details["price"] if prod_details else Decimal("1000")),
                         is_primary=True
                     )
                 ]
+            merchant_decision.basket_items = valid_m_items
 
             if merchant_decision.action != "REJECT":
                 merchant_original_total = sum(Decimal(str(item.original_price)) * Decimal(item.quantity) for item in merchant_decision.basket_items)
@@ -1369,18 +1386,28 @@ class NegotiationOrchestrator:
                     )
 
                 # Ensure basket_items is populated on buyer decision
-                if buyer_decision.action != "REJECT" and not getattr(buyer_decision, "basket_items", None):
-                    p_obj = self.db.query(Product).filter(Product.id == buyer_decision.product_id).first()
-                    buyer_decision.basket_items = [
+                p_obj = self.db.query(Product).filter(Product.id == buyer_decision.product_id).first()
+                valid_b_items = []
+                for item in (getattr(buyer_decision, "basket_items", None) or []):
+                    if isinstance(item, BasketItemSchema):
+                        valid_b_items.append(item)
+                    elif isinstance(item, dict):
+                        try:
+                            valid_b_items.append(BasketItemSchema.model_validate(item))
+                        except Exception:
+                            pass
+                if not valid_b_items and buyer_decision.action != "REJECT":
+                    valid_b_items = [
                         BasketItemSchema(
-                            product_id=buyer_decision.product_id,
+                            product_id=buyer_decision.product_id if isinstance(buyer_decision.product_id, int) else (p_obj.id if p_obj else 1),
                             name=p_obj.name if p_obj else "Product",
-                            quantity=buyer_decision.quantity,
-                            original_price=p_obj.price if p_obj else buyer_decision.unit_price,
-                            negotiated_price=buyer_decision.unit_price,
+                            quantity=buyer_decision.quantity if isinstance(buyer_decision.quantity, int) else 1,
+                            original_price=p_obj.price if p_obj else (buyer_decision.unit_price if isinstance(buyer_decision.unit_price, Decimal) else Decimal("1000")),
+                            negotiated_price=buyer_decision.unit_price if isinstance(buyer_decision.unit_price, Decimal) else Decimal("1000"),
                             is_primary=True
                         )
                     ]
+                buyer_decision.basket_items = valid_b_items
 
                 if buyer_decision.action != "REJECT":
                     buyer_original_total = sum(Decimal(str(item.original_price)) * Decimal(item.quantity) for item in buyer_decision.basket_items)
@@ -1639,6 +1666,7 @@ class NegotiationOrchestrator:
 
         # 4. Finalization & Policy Verification
         if current_status == "AGREED" and final_price is not None and selected_product_id is not None:
+            current_stage = NegotiationStage.POLICY_VALIDATION
             AuditEngine.log_event(
                 db=self.db,
                 actor="SYSTEM",
@@ -1656,6 +1684,7 @@ class NegotiationOrchestrator:
                 reason="Verifying final proposed price against Merchant policies."
             )
 
+            current_stage = NegotiationStage.FINAL_BASKET_VALIDATION
             # Retrieve the exact accepted proposal snapshot
             accepted_prop = next((p for p in proposals if p.get("proposal_id") == accepted_proposal_id), None)
             if accepted_prop and accepted_prop.get("basket_items"):
@@ -1689,10 +1718,12 @@ class NegotiationOrchestrator:
 
             final_price = Decimal(financials["basket_total"])
 
+            current_stage = NegotiationStage.NEGOTIATION_SNAPSHOT
             # Determine component product IDs for legacy backward compatibility check
             comp_ids = [item["product_id"] for item in serialized_basket_items]
             purchase_prod_id = 1 if (1 in comp_ids and 2 in comp_ids) else selected_product_id
 
+            current_stage = NegotiationStage.PURCHASE_REQUEST_CREATION
             purchase_res = request_purchase_tool(
                 db=self.db,
                 buyer_id=buyer_id,
@@ -1713,7 +1744,7 @@ class NegotiationOrchestrator:
                 )
                 memory.add_policy_verdict(decision="BLOCKED", reasons=purchase_res["reasons"])
                 memory.final_outcome = "BLOCKED"
-                raise NegotiationError(f"Policy Engine rejected final deal: {', '.join(purchase_res['reasons'])}", build_failed_result(purchase_res['reasons'], final_price))
+                raise NegotiationError(f"Policy Engine rejected final deal: {', '.join(purchase_res['reasons'])}", build_failed_result(purchase_res['reasons'], final_price, error_code="POLICY_REJECTED"))
 
             final_decision_pr_id = purchase_res["purchase_request_id"]
             memory.final_outcome = "APPROVED"
@@ -1848,6 +1879,11 @@ class NegotiationOrchestrator:
                 "merchant_objective": memory.merchant_goal,
                 "merchant_tools_used": self.merchant.tools_called_in_session,
                 "merchant_confidence": self.merchant.last_confidence,
+                
+                # Stage & Lifecycle tracking
+                "stage": NegotiationStage.PURCHASE_REQUEST_CREATION.value,
+                "status": "success",
+                "error_code": None,
                 
                 # Step 12 metadata
                 "provider": provider_name,

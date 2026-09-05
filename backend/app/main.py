@@ -652,52 +652,38 @@ def get_transactions(db: Session = Depends(get_db)):
 
 # --- E2E DEMO ORCHESTRATION ENDPOINT ---
 
-class DemoCommerceRequest(BaseModel):
-    buyer_id: str
-    intent: str
-    budget: Decimal = Decimal("2000.00")
+def safe_json_dumps(obj: Any) -> str:
+    import json
+    import datetime
+    import uuid
+    from decimal import Decimal
+    from enum import Enum
+    
+    class SafeJSONEncoder(json.JSONEncoder):
+        def default(self, o):
+            if isinstance(o, Decimal):
+                return str(o)
+            elif isinstance(o, (datetime.datetime, datetime.date)):
+                return o.isoformat()
+            elif isinstance(o, uuid.UUID):
+                return str(o)
+            elif isinstance(o, Enum):
+                return o.value
+            elif hasattr(o, "model_dump"):
+                return o.model_dump()
+            elif hasattr(o, "dict"):
+                return o.dict()
+            elif isinstance(o, (set, frozenset)):
+                return list(o)
+            elif isinstance(o, Exception):
+                return str(o)
+            return super().default(o)
+            
+    return json.dumps(obj, cls=SafeJSONEncoder)
 
-class DemoCommerceResponse(BaseModel):
-    buyer_id: str
-    intent: str
-    catalog_search_results: List[Dict[str, Any]]
-    selected_product_id: int
-    cross_sell_product_id: int
-    bundle_offer: Dict[str, Any]
-    negotiation_history: List[Dict[str, Any]]
-    conversation_events: List[Dict[str, Any]] = []
-    purchase_request_id: int
-    decision: str
-    reasons: List[str]
-    original_amount: str
-    final_amount: str
-    discount_percent: str
-    margin_percent: str
-    policy_version: str
-    basket: Optional[Dict[str, Any]] = None
-    
-    # Trace variables
-    agent_mode: str = "OFFLINE MOCK"
-    buyer_objective: str = "Optimize bundle pricing & enforce budget limits"
-    buyer_tools_used: List[str] = []
-    buyer_confidence: float = 1.0
-    merchant_objective: str = "Maximize sales margins & bundle volume conversion"
-    merchant_tools_used: List[str] = []
-    merchant_confidence: float = 1.0
-    
-    provider_summary: Optional[Dict[str, Any]] = None
-    
-    # Step 12 metadata
-    provider: str = "MockProvider"
-    model: str = "mock-model-v2"
-    execution_mode: str = "OFFLINE MOCK"
-    session_id: str = "session_mock"
-    agent_role: str = "BUYER_AGENT & MERCHANT_AGENT"
-    start_time: str = ""
-    completion_time: str = ""
 
-@app.post("/api/demo/commerce", response_model=DemoCommerceResponse)
-def run_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depends(get_db)):
+@app.post("/api/demo/commerce", response_model=schemas.DemoCommerceResponse)
+def run_demo_commerce_flow(request: schemas.DemoCommerceRequest, db: Session = Depends(get_db)):
     from backend.app.agents.provider import get_provider_for_agent
     from backend.app.agents.buyer_agent import BuyerAgent
     from backend.app.agents.merchant_agent import MerchantAgent
@@ -716,37 +702,38 @@ def run_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depends(g
         )
         return res
     except NegotiationError as e:
-        logger.error(f"Autonomous negotiation aborted: {e}")
+        logger.warning(f"Autonomous negotiation aborted: {e}")
         if getattr(e, "result_data", None) is not None:
             return e.result_data
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"General error in commerce flow: {e}")
-        raise HTTPException(status_code=500, detail="Negotiation flow encountered a system error.")
+        logger.exception("Commerce negotiation failed", extra={"buyer_id": request.buyer_id, "intent": request.intent})
+        raise HTTPException(status_code=500, detail=f"Negotiation flow encountered a system error: {str(e)}")
+
 
 @app.post("/api/demo/commerce/stream")
-def stream_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depends(get_db)):
+def stream_demo_commerce_flow(request: schemas.DemoCommerceRequest):
     from fastapi.responses import StreamingResponse
+    from backend.app.database import SessionLocal
     from backend.app.agents.provider import get_provider_for_agent
     from backend.app.agents.buyer_agent import BuyerAgent
     from backend.app.agents.merchant_agent import MerchantAgent
     from backend.app.agents.orchestrator import NegotiationOrchestrator, NegotiationError
-    import json
     import queue
     import threading
 
     def event_stream():
-        buyer = BuyerAgent(get_provider_for_agent("buyer"))
-        merchant = MerchantAgent(get_provider_for_agent("merchant"))
-        orchestrator = NegotiationOrchestrator(db, buyer, merchant)
-
         event_q: queue.Queue = queue.Queue()
 
         def on_event_cb(evt: dict):
             event_q.put({"msg_type": "event", "data": evt})
 
         def worker():
+            thread_db = SessionLocal()
             try:
+                buyer = BuyerAgent(get_provider_for_agent("buyer"))
+                merchant = MerchantAgent(get_provider_for_agent("merchant"))
+                orchestrator = NegotiationOrchestrator(thread_db, buyer, merchant)
                 res = orchestrator.run_negotiation_loop(
                     buyer_id=request.buyer_id,
                     intent=request.intent,
@@ -756,29 +743,50 @@ def stream_demo_commerce_flow(request: DemoCommerceRequest, db: Session = Depend
                 )
                 event_q.put({"msg_type": "complete", "result": res})
             except NegotiationError as e:
-                err_data = getattr(e, "result_data", {"decision": "REJECTED", "reasons": [str(e)]})
-                event_q.put({"msg_type": "error", "error": str(e), "result": err_data})
+                err_data = getattr(e, "result_data", {
+                    "decision": "REJECTED",
+                    "reasons": [str(e)],
+                    "status": "failed",
+                    "stage": "POLICY_VALIDATION",
+                    "error_code": "NEGOTIATION_ERROR"
+                })
+                logger.warning(f"Negotiation rejected or aborted in stream: {e}")
+                event_q.put({
+                    "msg_type": "error",
+                    "error": str(e),
+                    "stage": err_data.get("stage", "POLICY_VALIDATION"),
+                    "error_code": err_data.get("error_code", "NEGOTIATION_ERROR"),
+                    "result": err_data
+                })
             except Exception as e:
-                logger.error(f"Error in streaming negotiation worker: {e}", exc_info=True)
-                event_q.put({"msg_type": "error", "error": str(e)})
+                logger.exception("Error in streaming negotiation worker", extra={"intent": request.intent, "buyer_id": request.buyer_id})
+                event_q.put({
+                    "msg_type": "error",
+                    "error": str(e),
+                    "stage": "NEGOTIATION_RUNTIME",
+                    "error_code": "INTERNAL_SERVER_ERROR"
+                })
+            finally:
+                thread_db.close()
 
         t = threading.Thread(target=worker, daemon=True)
         t.start()
 
         while True:
             try:
-                item = event_q.get(timeout=30.0)
+                item = event_q.get(timeout=45.0)
             except queue.Empty:
-                yield f"data: {json.dumps({'event_type': 'ERROR', 'type': 'error', 'error': 'Stream timed out.'})}\n\n"
+                yield f"data: {safe_json_dumps({'event_type': 'ERROR', 'type': 'error', 'status': 'failed', 'stage': 'STREAMING', 'error_code': 'TIMEOUT', 'message': 'Stream timed out.'})}\n\n"
                 break
 
             if item["msg_type"] == "event":
-                yield f"data: {json.dumps(item['data'])}\n\n"
+                yield f"data: {safe_json_dumps(item['data'])}\n\n"
             elif item["msg_type"] == "complete":
-                yield f"data: {json.dumps({'event_type': 'COMPLETE', 'type': 'complete', 'result': item['result']})}\n\n"
+                res_obj = item["result"]
+                yield f"data: {safe_json_dumps({'event_type': 'COMPLETE', 'type': 'completed', 'status': 'success', 'session_id': res_obj.get('session_id'), 'final_result': res_obj, 'result': res_obj})}\n\n"
                 break
             elif item["msg_type"] == "error":
-                yield f"data: {json.dumps({'event_type': 'ERROR', 'type': 'error', 'error': item.get('error'), 'result': item.get('result')})}\n\n"
+                yield f"data: {safe_json_dumps({'event_type': 'ERROR', 'type': 'error', 'status': 'failed', 'stage': item.get('stage', 'NEGOTIATION_ERROR'), 'error_code': item.get('error_code', 'NEGOTIATION_ERROR'), 'message': item.get('error'), 'error': item.get('error'), 'result': item.get('result')})}\n\n"
                 break
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

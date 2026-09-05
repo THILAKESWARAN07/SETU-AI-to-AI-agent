@@ -388,15 +388,29 @@ export default function Negotiation() {
     navigate('/shopping');
   };
 
-  // UI Render: Error State
-  if (phase === 'FAILED' || (error && messages.length === 0)) {
+  // UI Render: Error State (only if no approved deal and no messages)
+  if (phase === 'FAILED' && !result && messages.length === 0) {
+    let errorTitle = 'Negotiation Error';
+    let errorDesc = error || 'The negotiation session could not be completed safely. All price floors and boundaries remain fully protected.';
+
+    if (error?.includes('timeout') || error?.includes('timed out')) {
+      errorTitle = 'Session Timeout';
+      errorDesc = 'The autonomous negotiation took longer than expected. Please try again.';
+    } else if (error?.includes('No products') || error?.includes('catalog')) {
+      errorTitle = 'Product Not Found';
+      errorDesc = 'No matching catalog items were found for your search query. Please try different keywords.';
+    } else if (error?.includes('Policy Engine') || error?.includes('policy')) {
+      errorTitle = 'Commercial Policy Boundary';
+      errorDesc = error;
+    }
+
     return (
       <div className="negotiation-page-container container animate-fade-in" style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div className="error-panel" style={{ maxWidth: '520px', textAlign: 'center', padding: '32px' }}>
           <AlertTriangle className="error-icon" style={{ width: '48px', height: '48px', color: '#ef4444', margin: '0 auto 16px' }} />
-          <h3 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: '8px' }}>Negotiation Runtime Error</h3>
-          <p className="error-msg" style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px' }}>
-            {error || 'The negotiation session could not be completed safely. All price floors and boundaries remain fully protected.'}
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: '8px' }}>{errorTitle}</h3>
+          <p className="error-msg" style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px', lineHeight: 1.5 }}>
+            {errorDesc}
           </p>
           <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
             <button onClick={startNegotiationStream} className="btn btn-primary" style={{ gap: '8px' }}>

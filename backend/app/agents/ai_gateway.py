@@ -1538,41 +1538,99 @@ class AIGateway:
         Applies authoritative SETU policy clamping to agent output.
         Guarantees that LLM outputs never violate absolute budget or price floor boundaries.
         """
-        # Ensure basket_items is populated
-        if not getattr(decision, "basket_items", None):
-            prod_id = getattr(decision, "product_id", context.current_product.get("id", 1))
-            prod_name = context.current_product.get("name", "Product")
-            cat_p = context.catalog_price
-            unit_p = getattr(decision, "unit_price", cat_p)
-            decision.basket_items = [
+        # 1. Sanitize action
+        valid_buyer_actions = {"OFFER", "COUNTER", "ACCEPT", "REJECT", "ACCEPT_BUNDLE", "REJECT_BUNDLE"}
+        valid_merchant_actions = {"COUNTER", "ACCEPT", "REJECT", "BUNDLE", "PROPOSE_BUNDLE", "HOLD_PREVIOUS_OFFER"}
+        raw_act = getattr(decision, "action", "")
+        if isinstance(raw_act, dict) or not isinstance(raw_act, str):
+            raw_act = "COUNTER"
+            setattr(decision, "action", raw_act)
+        elif context.agent_role.upper().startswith("BUYER") and raw_act not in valid_buyer_actions:
+            setattr(decision, "action", "COUNTER")
+        elif context.agent_role.upper().startswith("MERCHANT") and raw_act not in valid_merchant_actions:
+            setattr(decision, "action", "COUNTER")
+
+        # 2. Sanitize and validate basket_items
+        raw_items = getattr(decision, "basket_items", None) or []
+        valid_items = []
+        for item in raw_items:
+            if isinstance(item, BasketItemSchema):
+                valid_items.append(item)
+            elif isinstance(item, dict):
+                try:
+                    valid_items.append(BasketItemSchema.model_validate(item))
+                except Exception:
+                    pass
+
+        prod_id = getattr(decision, "product_id", context.current_product.get("id", 1))
+        if not isinstance(prod_id, int):
+            try:
+                prod_id = int(str(prod_id))
+            except Exception:
+                prod_id = context.current_product.get("id", 1)
+        setattr(decision, "product_id", prod_id)
+
+        prod_name = context.current_product.get("name", "Product")
+        cat_p = context.catalog_price
+
+        # Sanitize unit_price and total_amount
+        raw_unit_p = getattr(decision, "unit_price", None)
+        try:
+            unit_p = Decimal(str(raw_unit_p)) if (raw_unit_p is not None and not isinstance(raw_unit_p, (dict, list))) else cat_p
+        except Exception:
+            unit_p = cat_p
+        setattr(decision, "unit_price", unit_p)
+
+        if not valid_items:
+            valid_items = [
                 BasketItemSchema(
                     product_id=prod_id,
                     name=prod_name,
-                    quantity=getattr(decision, "quantity", 1),
+                    quantity=1,
                     original_price=cat_p,
                     negotiated_price=unit_p,
                     is_primary=True
                 )
             ]
+        decision.basket_items = valid_items
+
+        # Sanitize rationale / message / reason
+        for str_field in ("rationale", "reason", "message"):
+            val = getattr(decision, str_field, None)
+            if isinstance(val, (dict, list)) or (val is not None and not isinstance(val, str)):
+                setattr(decision, str_field, f"Autonomous reasoning for {context.agent_role}.")
 
         # Buyer clamping
         if context.agent_role.upper().startswith("BUYER"):
-            if getattr(decision, "total_amount", Decimal("0")) > context.buyer_max_budget:
-                decision.total_amount = context.buyer_max_budget
-                decision.unit_price = context.buyer_max_budget
-                if decision.basket_items and len(decision.basket_items) == 1:
-                    decision.basket_items[0].negotiated_price = context.buyer_max_budget
+            try:
+                tot = getattr(decision, "total_amount", Decimal("0"))
+                tot_dec = Decimal(str(tot)) if not isinstance(tot, (dict, list)) else Decimal("0")
+                b_max = Decimal(str(context.buyer_max_budget))
+                if tot_dec <= Decimal("0") or tot_dec > b_max:
+                    clamped_val = b_max if tot_dec > b_max else (context.buyer_max_budget * Decimal("0.85")).quantize(Decimal("0.01"))
+                    decision.total_amount = clamped_val
+                    decision.unit_price = clamped_val
+                    if decision.basket_items and len(decision.basket_items) == 1:
+                        decision.basket_items[0].negotiated_price = clamped_val
+            except Exception as e:
+                logger.warning(f"Error in buyer clamping: {e}")
 
         # Merchant clamping
         elif context.agent_role.upper().startswith("MERCHANT"):
             if getattr(decision, "action", "") in ("COUNTER", "ACCEPT", "BUNDLE", "PROPOSE_BUNDLE", "HOLD_PREVIOUS_OFFER"):
                 # If standalone counter, clamp against minimum floor
                 if getattr(decision, "action", "") not in ("BUNDLE", "PROPOSE_BUNDLE") and len(getattr(decision, "basket_items", [])) <= 1:
-                    if getattr(decision, "total_amount", Decimal("0")) < context.merchant_min_price:
-                        decision.total_amount = context.merchant_min_price
-                        decision.unit_price = context.merchant_min_price
-                        if decision.basket_items and len(decision.basket_items) == 1:
-                            decision.basket_items[0].negotiated_price = context.merchant_min_price
+                    try:
+                        tot = getattr(decision, "total_amount", Decimal("0"))
+                        tot_dec = Decimal(str(tot)) if not isinstance(tot, (dict, list)) else Decimal("0")
+                        m_min = Decimal(str(context.merchant_min_price))
+                        if tot_dec < m_min or tot_dec <= Decimal("0"):
+                            decision.total_amount = m_min
+                            decision.unit_price = m_min
+                            if decision.basket_items and len(decision.basket_items) == 1:
+                                decision.basket_items[0].negotiated_price = m_min
+                    except Exception as e:
+                        logger.warning(f"Error in merchant clamping: {e}")
 
         return decision
 

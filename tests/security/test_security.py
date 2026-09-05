@@ -238,10 +238,10 @@ def test_payment_endpoint_blocks_duplicate_payment_request(client: TestClient, d
     assert res1.status_code == 200
     assert "razorpay_order_id" in res1.json()
 
-    # 3. Second payment call - fail
+    # 3. Second payment call - idempotent return of existing order without creating duplicate
     res2 = client.post(f"/api/payment/create?purchase_request_id={pr_id}")
-    assert res2.status_code == 400
-    assert "already exists" in res2.json()["detail"]
+    assert res2.status_code == 200
+    assert res2.json()["razorpay_order_id"] == res1.json()["razorpay_order_id"]
 
 
 def test_agent_does_not_import_payments():

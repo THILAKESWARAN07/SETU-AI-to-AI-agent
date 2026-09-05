@@ -52,7 +52,7 @@ class MockRazorpayAdapter(PaymentGatewayAdapter):
         self._webhook_secret = webhook_secret
 
     def create_order(self, amount: Decimal, receipt_id: str) -> Dict[str, Any]:
-        amount_paise = int(amount * Decimal("100"))
+        amount_paise = int((amount * Decimal("100")).quantize(Decimal("1")))
         order_id = f"order_mock_{receipt_id}_{amount_paise}"
         logger.info(f"[MOCK PAY] Simulating Order creation: {order_id} for amount {amount}")
         return {
@@ -210,10 +210,16 @@ def process_payment_creation(db: Session, purchase_request_id: int) -> Transacti
             )
             raise PermissionError("Purchase request has not been APPROVED by the backend Policy Engine.")
 
-        # 4. Re-check for existing transaction INSIDE the locked block to prevent duplicate Razorpay orders
-        existing_tx = db.query(Transaction).filter(Transaction.purchase_request_id == purchase_request_id).first()
+        # 4. Idempotency Check: if a transaction already exists for this purchase request
+        existing_tx = db.query(Transaction).filter(
+            Transaction.purchase_request_id == purchase_request_id
+        ).order_by(Transaction.created_at.desc()).first()
+
         if existing_tx:
-            raise ValueError("A payment transaction already exists for this purchase request.")
+            if existing_tx.status in ("SUCCESS", "PENDING"):
+                logger.info(f"Idempotent payment creation: returning existing {existing_tx.status} transaction (ID {existing_tx.id}) with order {existing_tx.razorpay_order_id}")
+                return existing_tx
+            # If status is FAILED or CANCELLED, allow creating a new transaction attempt for the locked deal
 
         # 5. Fetch the latest PolicyDecision associated with this request
         decision = db.query(PolicyDecision).filter(
@@ -284,15 +290,24 @@ def process_payment_creation(db: Session, purchase_request_id: int) -> Transacti
             logger.error(f"Razorpay API call failed during order generation: {e}")
             raise RuntimeError(f"Payment Gateway order creation failed: {e}")
 
-        # 9. Create Transaction
-        logger.info(f"Creating new Transaction record in database: purchase_request_id={pr.id}, order_id={order_data['id']}, amount={pr.final_amount}")
-        tx = Transaction(
-            purchase_request_id=pr.id,
-            razorpay_order_id=order_data["id"],
-            amount=pr.final_amount,
-            status="PENDING"
-        )
-        db.add(tx)
+        # 9. Create or Update Transaction
+        if existing_tx:
+            logger.info(f"Re-using existing Transaction record (ID {existing_tx.id}) for retry: updating order_id={order_data['id']}, status=PENDING")
+            existing_tx.razorpay_order_id = order_data["id"]
+            existing_tx.amount = pr.final_amount
+            existing_tx.status = "PENDING"
+            existing_tx.razorpay_payment_id = None
+            existing_tx.razorpay_signature = None
+            tx = existing_tx
+        else:
+            logger.info(f"Creating new Transaction record in database: purchase_request_id={pr.id}, order_id={order_data['id']}, amount={pr.final_amount}")
+            tx = Transaction(
+                purchase_request_id=pr.id,
+                razorpay_order_id=order_data["id"],
+                amount=pr.final_amount,
+                status="PENDING"
+            )
+            db.add(tx)
         db.commit()
         db.refresh(tx)
         logger.info(f"Successfully saved and committed Transaction ID {tx.id} for order {tx.razorpay_order_id}")

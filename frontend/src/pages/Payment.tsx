@@ -304,14 +304,27 @@ export default function Payment() {
     setLocalStatus('FAILED');
   };
 
+  // Retry payment without re-running negotiation
+  const handleRetryPayment = () => {
+    if (!result) return;
+    setIsSecuring(true);
+    setError(null);
+    apiService.createPayment(result.purchase_request_id)
+      .then((tx) => {
+        setTransaction(tx);
+        setLocalStatus(tx.status === 'SUCCESS' ? 'SUCCESS' : 'PENDING');
+        setIsSecuring(false);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to secure payment channel.');
+        setIsSecuring(false);
+        setLocalStatus('FAILED');
+      });
+  };
+
   // Navigate to shopping
   const handleGoToShopping = () => {
     navigate('/shopping');
-  };
-
-  // Navigate to negotiation
-  const handleRetryNegotiation = () => {
-    navigate('/negotiation', { state: { result } });
   };
 
   // Navigate to dashboard
@@ -364,7 +377,7 @@ export default function Payment() {
       {localStatus === 'FAILED' && (
         <PaymentResult 
           errorMsg={error}
-          onRetry={handleRetryNegotiation}
+          onRetry={handleRetryPayment}
           onGoToShopping={handleGoToShopping}
         />
       )}

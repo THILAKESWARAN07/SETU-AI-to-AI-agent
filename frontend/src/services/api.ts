@@ -19,13 +19,27 @@ export class ApiError extends Error {
   status?: number;
   statusText?: string;
   detail?: string;
+  stage?: string;
+  errorCode?: string;
+  sessionId?: string;
 
-  constructor(message: string, status?: number, statusText?: string, detail?: string) {
+  constructor(
+    message: string,
+    status?: number,
+    statusText?: string,
+    detail?: string,
+    stage?: string,
+    errorCode?: string,
+    sessionId?: string
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.statusText = statusText;
     this.detail = detail;
+    this.stage = stage;
+    this.errorCode = errorCode;
+    this.sessionId = sessionId;
   }
 }
 
@@ -55,26 +69,39 @@ async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T>
 
   if (!response.ok) {
     let detail = '';
+    let stage = '';
+    let errorCode = '';
+    let sessionId = '';
     try {
       const errorBody = await response.json();
-      detail = errorBody?.detail || '';
+      detail = errorBody?.detail || errorBody?.message || '';
+      stage = errorBody?.stage || '';
+      errorCode = errorBody?.error_code || '';
+      sessionId = errorBody?.session_id || '';
     } catch {
       // Response is not JSON
     }
 
     if (response.status >= 500) {
+      const msg = detail || 'A backend processing error occurred. Please try again.';
       throw new ApiError(
-        'An internal server error occurred on the trust layer. Please try again later.',
+        msg,
         response.status,
         response.statusText,
-        detail
+        detail,
+        stage,
+        errorCode,
+        sessionId
       );
     } else if (response.status === 404) {
       throw new ApiError(
         'The requested API endpoint was not found.',
         response.status,
         response.statusText,
-        detail
+        detail,
+        stage,
+        errorCode,
+        sessionId
       );
     } else {
       // 400, 403, 422, etc.
@@ -82,7 +109,10 @@ async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T>
         detail || `Request failed with status code ${response.status}.`,
         response.status,
         response.statusText,
-        detail
+        detail,
+        stage,
+        errorCode,
+        sessionId
       );
     }
   }
@@ -257,13 +287,22 @@ export const apiService = {
         if (trimmed.startsWith('data: ')) {
           try {
             const data = JSON.parse(trimmed.slice(6));
-            if (data.type === 'complete' || data.event_type === 'COMPLETE') {
-              finalResult = data.result;
+            if (data.type === 'complete' || data.type === 'completed' || data.event_type === 'COMPLETE') {
+              finalResult = data.final_result || data.result;
             } else if (data.type === 'error' || data.event_type === 'ERROR') {
-              if (data.result) {
-                finalResult = data.result;
+              if (data.result || data.final_result) {
+                finalResult = data.final_result || data.result;
               }
-              throw new ApiError(data.error || 'Negotiation stream error');
+              const errMsg = data.message || data.error || 'Negotiation stream error';
+              throw new ApiError(
+                errMsg,
+                500,
+                'Stream Error',
+                data.detail || errMsg,
+                data.stage,
+                data.error_code,
+                data.session_id
+              );
             } else {
               onEvent(data);
             }
