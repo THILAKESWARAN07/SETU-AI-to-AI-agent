@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional, Callable
 from sqlalchemy.orm import Session
 
+from backend.app.config import settings
 from backend.app.schemas import NegotiationStage
 from backend.app.models import Product, MerchantPolicy
 from backend.app.audit import AuditEngine
@@ -11,7 +12,7 @@ from backend.app.policy import PolicyEngine
 from backend.app.agents.buyer_agent import BuyerAgent
 from backend.app.agents.merchant_agent import MerchantAgent
 from backend.app.agents.pricing_strategy import MerchantPricingStrategy, calculate_basket_financials
-from backend.app.agents.provider import BuyerDecision, MerchantDecision
+from backend.app.agents.provider import BuyerDecision, MerchantDecision, MockProvider
 from backend.app.agents.tools import (
     search_catalog_tool, view_product_tool, get_policy_constraints_tool,
     evaluate_budget_tool, get_inventory_tool, get_product_price_tool,
@@ -128,17 +129,33 @@ class NegotiationOrchestrator:
         intent: str,
         budget: Decimal,
         max_rounds: int = 4,
+        max_llm_calls: Optional[int] = None,
         on_event: Optional[Callable[[Dict[str, Any]], None]] = None
     ) -> Dict[str, Any]:
         import uuid
         import datetime
+        import time
         from backend.app.agents.memory import NegotiationMemory
         
         session_id = f"session_{uuid.uuid4().hex[:8]}"
         start_time = datetime.datetime.utcnow().isoformat() + "Z"
+        start_time_epoch = time.time()
         provider_name = self.buyer.provider.provider_name
         model_name = self.buyer.provider.model_name
         execution_mode = self.buyer.provider.agent_mode
+        
+        # LLM Call Budget tracking
+        is_mock_mode = execution_mode in ["OFFLINE MOCK", "MOCK"] or isinstance(self.buyer.provider, MockProvider)
+        if max_llm_calls is not None:
+            max_llm_budget = max_llm_calls
+        elif is_mock_mode:
+            max_llm_budget = max_rounds * 2  # Unrestricted for offline mock unit tests
+        else:
+            max_llm_budget = getattr(settings, "MAX_REAL_LLM_CALLS", 3)
+        llm_calls_made = 0
+        buyer_llm_calls = 0
+        merchant_llm_calls = 0
+        deterministic_turns = 0
         
         # 1. Parse intent and budget constraints
         budget_info = parse_budget_intent(intent, budget)
@@ -197,7 +214,7 @@ class NegotiationOrchestrator:
             if effective_meta:
                 if isinstance(effective_meta, dict):
                     evt_data["provider_used"] = effective_meta.get("provider_used", "mock")
-                    evt_data["provider_type"] = effective_meta.get("provider_type", "real_llm" if evt_data["provider_used"] != "mock" else "deterministic_fallback")
+                    evt_data["provider_type"] = effective_meta.get("provider_type", "real_llm" if evt_data["provider_used"] not in ("mock", "deterministic_engine") else ("deterministic_turn" if evt_data["provider_used"] == "deterministic_engine" else "deterministic_fallback"))
                     evt_data["model_name"] = effective_meta.get("model_name", "mock-model-v2")
                     evt_data["agent_role"] = effective_meta.get("agent_role", evt_data.get("actor"))
                     evt_data["fallback_used"] = bool(effective_meta.get("fallback_used", False))
@@ -205,9 +222,10 @@ class NegotiationOrchestrator:
                     evt_data["fallback_reason"] = effective_meta.get("fallback_reason", None)
                     evt_data["response_latency_ms"] = effective_meta.get("response_latency_ms", 0.0)
                     evt_data["provider_attempts"] = effective_meta.get("provider_attempts", [])
+                    evt_data["is_deterministic"] = bool(effective_meta.get("is_deterministic", False))
                 else:
                     evt_data["provider_used"] = getattr(effective_meta, "provider_used", "mock")
-                    evt_data["provider_type"] = getattr(effective_meta, "provider_type", "real_llm" if evt_data["provider_used"] != "mock" else "deterministic_fallback")
+                    evt_data["provider_type"] = getattr(effective_meta, "provider_type", "real_llm" if evt_data["provider_used"] not in ("mock", "deterministic_engine") else ("deterministic_turn" if evt_data["provider_used"] == "deterministic_engine" else "deterministic_fallback"))
                     evt_data["model_name"] = getattr(effective_meta, "model_name", "mock-model-v2")
                     evt_data["agent_role"] = getattr(effective_meta, "agent_role", evt_data.get("actor"))
                     evt_data["fallback_used"] = bool(getattr(effective_meta, "fallback_used", False))
@@ -215,6 +233,7 @@ class NegotiationOrchestrator:
                     evt_data["fallback_reason"] = getattr(effective_meta, "fallback_reason", None)
                     evt_data["response_latency_ms"] = getattr(effective_meta, "response_latency_ms", 0.0)
                     evt_data["provider_attempts"] = getattr(effective_meta, "provider_attempts", [])
+                    evt_data["is_deterministic"] = bool(getattr(effective_meta, "is_deterministic", False))
                 
                 # Expose convenience aliases for UI & tests
                 evt_data["provider"] = evt_data["provider_used"]
@@ -234,7 +253,8 @@ class NegotiationOrchestrator:
                     "fallback_depth": evt_data["fallback_depth"],
                     "fallback_reason": evt_data["fallback_reason"],
                     "response_latency_ms": evt_data["response_latency_ms"],
-                    "provider_attempts": evt_data["provider_attempts"]
+                    "provider_attempts": evt_data["provider_attempts"],
+                    "is_deterministic": evt_data.get("is_deterministic", False)
                 }
 
             conversation_events.append(evt_data)
@@ -259,10 +279,20 @@ class NegotiationOrchestrator:
             fallback_count = sum(1 for m in provider_call_records if m and (getattr(m, "fallback_used", False) or (isinstance(m, dict) and m.get("fallback_used"))))
             provider_failovers = sum(1 for m in provider_call_records if m and (int(getattr(m, "fallback_depth", 0) or (m.get("fallback_depth") if isinstance(m, dict) else 0)) > 0 or len(getattr(m, "provider_attempts", []) or (m.get("provider_attempts") if isinstance(m, dict) else [])) > 1))
             real_llm_calls = cerebras_calls + groq_calls + gemini_calls + nvidia_nim_calls + openrouter_calls + ollama_calls
+            total_llm_calls = real_llm_calls + mock_calls
+            
+            # Extract unique providers used
+            providers_used_set = set()
+            for m in provider_call_records:
+                p_name = getattr(m, "provider_used", None) if not isinstance(m, dict) else m.get("provider_used")
+                if p_name:
+                    providers_used_set.add(p_name)
+            providers_used = list(providers_used_set)
             
             # Count deterministic operations avoided: catalog search, filter, margin math, policy checks, basket checks, inventory checks
             deterministic_ops_avoided = max(12, 4 * len(provider_call_records) + 4)
             estimated_llm_calls_saved = deterministic_ops_avoided
+            duration = round(time.time() - start_time_epoch, 2)
 
             return {
                 "cerebras_calls": cerebras_calls,
@@ -273,15 +303,26 @@ class NegotiationOrchestrator:
                 "ollama_calls": ollama_calls,
                 "mock_calls": mock_calls,
                 "real_llm_calls": real_llm_calls,
+                "total_llm_calls": total_llm_calls,
+                "deterministic_turns": deterministic_turns,
                 "deterministic_fallback_calls": mock_calls,
                 "deterministic_fallback_turns": mock_calls,
                 "provider_failovers": provider_failovers,
+                "providers_used": providers_used,
+                "buyer_llm_calls": buyer_llm_calls,
+                "merchant_llm_calls": merchant_llm_calls,
+                "llm_budget": max_llm_budget,
+                "llm_budget_remaining": max(0, max_llm_budget - real_llm_calls),
+                "negotiation_duration": duration,
+                "mock_fallback_used": (mock_calls > 0),
+                "mock_fallback_status": "USED" if mock_calls > 0 else "NOT USED",
                 "deterministic_operations_avoided": deterministic_ops_avoided,
                 "estimated_llm_calls_saved": estimated_llm_calls_saved,
                 "fallback_count": fallback_count,
                 "all_agent_turns_used_real_llm": (real_llm_calls > 0 and mock_calls == 0),
                 "all_agent_turns_used_gemini": (gemini_calls > 0 and mock_calls == 0 and real_llm_calls == gemini_calls),
-                "is_live": (real_llm_calls > 0 and mock_calls == 0)
+                "is_live": (real_llm_calls > 0 and mock_calls == 0),
+                "mode": "LIVE MULTI-PROVIDER" if (real_llm_calls > 0 and mock_calls == 0) else ("DETERMINISTIC FALLBACK" if mock_calls > 0 else "AUTONOMOUS AI")
             }
 
         current_status = "IN_PROGRESS"
@@ -322,6 +363,16 @@ class NegotiationOrchestrator:
             completion_time = datetime.datetime.utcnow().isoformat() + "Z"
             mode_val = execution_mode_override or execution_mode
             
+            # For BLOCKED, REJECTED, or failed deals, final_amount is None (not a valid 0.00 deal)
+            safe_final_amount = None
+            if final_price_val is not None and decision_val not in ["BLOCKED", "REJECTED", "ERROR"]:
+                try:
+                    dec_val = Decimal(str(final_price_val))
+                    if dec_val > Decimal("0.00"):
+                        safe_final_amount = str(dec_val)
+                except Exception:
+                    safe_final_amount = None
+
             return {
                 "buyer_id": buyer_id,
                 "intent": intent,
@@ -331,19 +382,19 @@ class NegotiationOrchestrator:
                 "bundle_offer": {
                     "product_ids": [1, 2] if prod_id == 3 else [prod_id],
                     "original_amount": original_amt_str,
-                    "offered_amount": str(final_price_val) if final_price_val else original_amt_str,
-                    "discount_percent": "0.00",
-                    "reason": "Negotiation session failed"
+                    "offered_amount": safe_final_amount,
+                    "discount_percent": None,
+                    "reason": reasons[0] if reasons else "Negotiation session blocked or rejected"
                 },
                 "negotiation_history": negotiation_history or [],
                 "conversation_events": conversation_events or [],
-                "purchase_request_id": 0,
+                "purchase_request_id": None,
                 "decision": decision_val,
                 "reasons": reasons,
                 "original_amount": original_amt_str,
-                "final_amount": str(final_price_val) if final_price_val else "0.00",
-                "discount_percent": "0.00",
-                "margin_percent": "0.00",
+                "final_amount": safe_final_amount,
+                "discount_percent": None,
+                "margin_percent": None,
                 "policy_version": policy_version,
                 "agent_mode": mode_val,
                 "buyer_objective": memory.buyer_goal,
@@ -530,6 +581,8 @@ class NegotiationOrchestrator:
             current_buyer_meta = getattr(buyer_decision, "provider_metadata", None) or getattr(self.buyer, "last_execution_metadata", None) or getattr(self.buyer.provider, "last_execution_metadata", None)
             if current_buyer_meta:
                 provider_call_records.append(current_buyer_meta)
+            buyer_llm_calls += 1
+            llm_calls_made += 1
         except Exception as e:
             logger.error(f"Buyer Agent LLM failure: {e}")
             AuditEngine.log_event(
@@ -848,25 +901,78 @@ class NegotiationOrchestrator:
                 standalone_preferred=budget_info.get("standalone_preferred", False)
             )
 
-            try:
-                merchant_decision: MerchantDecision = self.merchant.negotiate_decision(self.db, merchant_prompt, memory=memory, context=merchant_context)
-                current_merchant_meta = getattr(merchant_decision, "provider_metadata", None) or getattr(self.merchant, "last_execution_metadata", None) or getattr(self.merchant.provider, "last_execution_metadata", None)
-                if current_merchant_meta:
-                    provider_call_records.append(current_merchant_meta)
-            except Exception as e:
-                logger.error(f"Merchant Agent LLM failure: {e}")
-                AuditEngine.log_event(
-                    db=self.db,
-                    actor="SYSTEM",
-                    action="PROVIDER_FAILURE",
-                    result="ERROR",
-                    reason=f"Merchant Agent LLM call failed: {str(e)}",
-                    metadata={"session_id": session_id, "provider": provider_name, "model": model_name}
+            if llm_calls_made < max_llm_budget:
+                try:
+                    merchant_decision: MerchantDecision = self.merchant.negotiate_decision(self.db, merchant_prompt, memory=memory, context=merchant_context)
+                    current_merchant_meta = getattr(merchant_decision, "provider_metadata", None) or getattr(self.merchant, "last_execution_metadata", None) or getattr(self.merchant.provider, "last_execution_metadata", None)
+                    if current_merchant_meta:
+                        provider_call_records.append(current_merchant_meta)
+                    merchant_llm_calls += 1
+                    llm_calls_made += 1
+                except Exception as e:
+                    logger.error(f"Merchant Agent LLM failure: {e}")
+                    AuditEngine.log_event(
+                        db=self.db,
+                        actor="SYSTEM",
+                        action="PROVIDER_FAILURE",
+                        result="ERROR",
+                        reason=f"Merchant Agent LLM call failed: {str(e)}",
+                        metadata={"session_id": session_id, "provider": provider_name, "model": model_name}
+                    )
+                    raise NegotiationError(
+                        f"LLM Provider failure: {str(e)}", 
+                        build_failed_result([f"LLM Provider failure: {str(e)}"], decision_val="ERROR", execution_mode_override="PROVIDER ERROR")
+                    )
+            else:
+                # Deterministic Negotiation Engine for mechanical merchant turn
+                deterministic_turns += 1
+                merchant_floor = Decimal(str(sales_eval.get("bounds", {}).get("absolute_floor", floor_price)))
+                merchant_target_price = Decimal(str(sales_eval.get("recommended_standalone_price") or merchant_floor))
+                is_acceptable = latest_buyer_offer.total_amount >= merchant_floor
+                if is_acceptable:
+                    m_action = "ACCEPT"
+                    m_rationale = f"Deterministic Engine: Buyer offer of ₹{latest_buyer_offer.total_amount} meets merchant minimum price floor (₹{merchant_floor}) and margin constraints."
+                    m_msg = f"Deal agreed! I'll accept ₹{latest_buyer_offer.total_amount} for the basket."
+                    m_price = latest_buyer_offer.total_amount
+                else:
+                    m_action = "COUNTER"
+                    m_rationale = f"Deterministic Engine: Offer of ₹{latest_buyer_offer.total_amount} is below floor. Countering at verified price ₹{merchant_target_price}."
+                    m_msg = f"I cannot accept below the minimum floor price. My best standalone counter is ₹{merchant_target_price}."
+                    m_price = merchant_target_price
+                
+                from backend.app.agents.provider import BasketItemSchema, MerchantDecision
+                merchant_decision = MerchantDecision(
+                    action=m_action,
+                    product_id=selected_product_id,
+                    unit_price=m_price,
+                    quantity=1,
+                    total_amount=m_price,
+                    margin_check="Margin check: PASSED",
+                    rationale=m_rationale,
+                    message=m_msg,
+                    basket_items=[
+                        BasketItemSchema(
+                            product_id=selected_product_id,
+                            name=prod_details["name"] if prod_details else "Product",
+                            quantity=1,
+                            original_price=prod_details["price"] if prod_details else Decimal("1000"),
+                            negotiated_price=m_price,
+                            is_primary=True
+                        )
+                    ]
                 )
-                raise NegotiationError(
-                    f"LLM Provider failure: {str(e)}", 
-                    build_failed_result([f"LLM Provider failure: {str(e)}"], decision_val="ERROR", execution_mode_override="PROVIDER ERROR")
-                )
+                current_merchant_meta = {
+                    "provider_used": "deterministic_engine",
+                    "provider_type": "deterministic_turn",
+                    "model_name": "deterministic-engine",
+                    "agent_role": "MERCHANT_AGENT",
+                    "fallback_used": False,
+                    "fallback_depth": 0,
+                    "fallback_reason": None,
+                    "response_latency_ms": 1.0,
+                    "provider_attempts": [{"provider": "deterministic_engine", "model": "deterministic-engine", "success": True, "latency_ms": 1.0}],
+                    "is_deterministic": True
+                }
 
             # Ensure basket_items is populated on merchant decision
             p_obj_cur = self.db.query(Product).filter(Product.id == selected_product_id).first()
@@ -1381,25 +1487,74 @@ class NegotiationOrchestrator:
                     buyer_profile=budget_info.get("buyer_profile", "PRICE_FIRST")
                 )
 
-                try:
-                    buyer_decision = self.buyer.negotiate_decision(self.db, buyer_eval_prompt, memory=memory, context=buyer_context)
-                    current_buyer_meta = getattr(buyer_decision, "provider_metadata", None) or getattr(self.buyer, "last_execution_metadata", None) or getattr(self.buyer.provider, "last_execution_metadata", None)
-                    if current_buyer_meta:
-                        provider_call_records.append(current_buyer_meta)
-                except Exception as e:
-                    logger.error(f"Buyer Agent LLM failure: {e}")
-                    AuditEngine.log_event(
-                        db=self.db,
-                        actor="SYSTEM",
-                        action="PROVIDER_FAILURE",
-                        result="ERROR",
-                        reason=f"Buyer Agent LLM call failed: {str(e)}",
-                        metadata={"session_id": session_id, "provider": provider_name, "model": model_name}
+                if llm_calls_made < max_llm_budget:
+                    try:
+                        buyer_decision = self.buyer.negotiate_decision(self.db, buyer_eval_prompt, memory=memory, context=buyer_context)
+                        current_buyer_meta = getattr(buyer_decision, "provider_metadata", None) or getattr(self.buyer, "last_execution_metadata", None) or getattr(self.buyer.provider, "last_execution_metadata", None)
+                        if current_buyer_meta:
+                            provider_call_records.append(current_buyer_meta)
+                        buyer_llm_calls += 1
+                        llm_calls_made += 1
+                    except Exception as e:
+                        logger.error(f"Buyer Agent LLM failure: {e}")
+                        AuditEngine.log_event(
+                            db=self.db,
+                            actor="SYSTEM",
+                            action="PROVIDER_FAILURE",
+                            result="ERROR",
+                            reason=f"Buyer Agent LLM call failed: {str(e)}",
+                            metadata={"session_id": session_id, "provider": provider_name, "model": model_name}
+                        )
+                        raise NegotiationError(
+                            f"LLM Provider failure: {str(e)}", 
+                            build_failed_result([f"LLM Provider failure: {str(e)}"], decision_val="ERROR", execution_mode_override="PROVIDER ERROR")
+                        )
+                else:
+                    # Deterministic Negotiation Engine for mechanical buyer turn
+                    deterministic_turns += 1
+                    target_price = Decimal(str(standalone_counter_price))
+                    if target_price <= effective_max_budget:
+                        b_action = "ACCEPT"
+                        b_rationale = f"Deterministic Engine: Merchant offer of ₹{target_price} is within buyer budget boundary of ₹{effective_max_budget}."
+                        b_msg = f"Deal agreed! ₹{target_price} for {prod_details['name'] if prod_details else 'the product'} fits within my budget."
+                    else:
+                        b_action = "REJECT"
+                        b_rationale = f"Deterministic Engine: Merchant counter of ₹{target_price} exceeds buyer maximum budget of ₹{effective_max_budget}."
+                        b_msg = f"Unable to proceed as ₹{target_price} exceeds the maximum authorized budget."
+                    
+                    from backend.app.agents.provider import BasketItemSchema, BuyerDecision
+                    buyer_decision = BuyerDecision(
+                        action=b_action,
+                        product_id=selected_product_id,
+                        quantity=1,
+                        unit_price=target_price,
+                        total_amount=target_price,
+                        rationale=b_rationale,
+                        message=b_msg,
+                        constraints_checked=["budget_fit", "catalog_price_bound"],
+                        basket_items=[
+                            BasketItemSchema(
+                                product_id=selected_product_id,
+                                name=prod_details["name"] if prod_details else "Product",
+                                quantity=1,
+                                original_price=prod_details["price"] if prod_details else Decimal("1000"),
+                                negotiated_price=target_price,
+                                is_primary=True
+                            )
+                        ]
                     )
-                    raise NegotiationError(
-                        f"LLM Provider failure: {str(e)}", 
-                        build_failed_result([f"LLM Provider failure: {str(e)}"], decision_val="ERROR", execution_mode_override="PROVIDER ERROR")
-                    )
+                    current_buyer_meta = {
+                        "provider_used": "deterministic_engine",
+                        "provider_type": "deterministic_turn",
+                        "model_name": "deterministic-engine",
+                        "agent_role": "BUYER_AGENT",
+                        "fallback_used": False,
+                        "fallback_depth": 0,
+                        "fallback_reason": None,
+                        "response_latency_ms": 1.0,
+                        "provider_attempts": [{"provider": "deterministic_engine", "model": "deterministic-engine", "success": True, "latency_ms": 1.0}],
+                        "is_deterministic": True
+                    }
 
                 # Ensure basket_items is populated on buyer decision
                 p_obj = self.db.query(Product).filter(Product.id == buyer_decision.product_id).first()

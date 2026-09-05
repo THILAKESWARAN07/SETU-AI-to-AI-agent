@@ -132,8 +132,9 @@ class CircuitBreaker:
     In-memory thread-safe circuit breaker for external LLM providers.
     Quickly trips to OPEN state on 429, quota limits, auth errors, billing errors,
     404 model not found, or repeated timeouts, preventing request delays on dead endpoints.
+    Recovers via HALF_OPEN state after cooldown expiry without persistent lock-in.
     """
-    def __init__(self, cooldown_seconds: float = 60.0):
+    def __init__(self, cooldown_seconds: float = 30.0):
         self.cooldown_seconds = cooldown_seconds
         self._lock = threading.Lock()
         self._states: Dict[str, Dict[str, Any]] = {}
@@ -141,7 +142,7 @@ class CircuitBreaker:
     def _init_provider(self, name: str):
         if name not in self._states:
             self._states[name] = {
-                "circuit_state": "CLOSED",  # "CLOSED" or "OPEN"
+                "circuit_state": "CLOSED",  # "CLOSED", "OPEN", "HALF_OPEN"
                 "failure_count": 0,
                 "circuit_open_until": 0.0,
                 "last_error": None,
@@ -163,13 +164,14 @@ class CircuitBreaker:
 
             if state["circuit_state"] == "OPEN":
                 if now >= state["circuit_open_until"]:
-                    # Cooldown expired -> test transition to half-open / closed
-                    state["circuit_state"] = "CLOSED"
-                    state["failure_count"] = 0
-                    logger.info(f"CircuitBreaker: Cooldown elapsed for '{provider_name}'. Circuit closed (half-open test).")
+                    # Cooldown expired -> test transition to HALF_OPEN (allows 1 trial request)
+                    state["circuit_state"] = "HALF_OPEN"
+                    logger.info(f"CircuitBreaker: Cooldown elapsed for '{provider_name}'. Circuit state changed to HALF_OPEN (probing).")
                     return True
                 else:
                     return False
+            elif state["circuit_state"] == "HALF_OPEN":
+                return True
             return True
 
     def record_success(self, provider_name: str):
@@ -179,6 +181,7 @@ class CircuitBreaker:
             state = self._states[provider_name]
             state["circuit_state"] = "CLOSED"
             state["failure_count"] = 0
+            state["circuit_open_until"] = 0.0
             state["last_error"] = None
             state["last_category"] = None
             state["last_success_timestamp"] = time.time()
@@ -229,7 +232,8 @@ class CircuitBreaker:
             state["last_category"] = cat or FailureCategory.UNKNOWN
             state["last_error"] = f"{type(error).__name__}: {err_str[:200]}"
 
-            if is_fast_trip or state["failure_count"] >= 2:
+            # In HALF_OPEN, any failure immediately trips back to OPEN
+            if is_fast_trip or state["circuit_state"] == "HALF_OPEN" or state["failure_count"] >= 2:
                 state["circuit_state"] = "OPEN"
                 state["circuit_open_until"] = time.time() + self.cooldown_seconds
                 logger.warning(
@@ -238,15 +242,24 @@ class CircuitBreaker:
                     f"Cooldown until {time.strftime('%H:%M:%S', time.localtime(state['circuit_open_until']))}."
                 )
 
+    def reset(self, provider_name: Optional[str] = None):
+        """Resets in-memory circuit breaker states (all or specific provider)."""
+        with self._lock:
+            if provider_name:
+                self._states.pop(provider_name.lower().strip(), None)
+            else:
+                self._states.clear()
+
     def get_status(self) -> Dict[str, Any]:
         with self._lock:
             now = time.time()
             res = {}
             for name, s in self._states.items():
                 is_open = s["circuit_state"] == "OPEN" and now < s["circuit_open_until"]
+                curr_state = "OPEN" if is_open else ("HALF_OPEN" if s["circuit_state"] == "HALF_OPEN" or (s["circuit_state"] == "OPEN" and now >= s["circuit_open_until"]) else "CLOSED")
                 res[name] = {
-                    "available": not is_open,
-                    "circuit_state": "OPEN" if is_open else "CLOSED",
+                    "available": curr_state in ("CLOSED", "HALF_OPEN"),
+                    "circuit_state": curr_state,
                     "failure_count": s["failure_count"],
                     "circuit_open_until": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(s["circuit_open_until"])) if is_open else None,
                     "last_category": s.get("last_category"),
@@ -258,7 +271,7 @@ class CircuitBreaker:
 
 
 # Global CircuitBreaker instance
-circuit_breaker = CircuitBreaker(cooldown_seconds=getattr(settings, "CIRCUIT_BREAKER_COOLDOWN_SECONDS", 60.0))
+circuit_breaker = CircuitBreaker(cooldown_seconds=getattr(settings, "CIRCUIT_BREAKER_COOLDOWN_SECONDS", 30.0))
 
 
 # ==============================================================================
@@ -1621,11 +1634,14 @@ class AIGateway:
                     obj = self._clamp_decision(obj, context)
 
                     meta.agent_role = role
-                    meta.fallback_used = (depth > 0 or p_name == "mock")
+                    is_mock_turn = (p_name == "mock")
+                    meta.fallback_used = (depth > 0)
                     meta.fallback_depth = depth
-                    meta.provider_attempts = list(provider_attempts)
+                    meta.real_provider_attempted = not is_mock_turn or depth > 0 or len(provider_attempts) > 0
+                    meta.real_llm_success = not is_mock_turn
+                    meta.mock_fallback_used = is_mock_turn
 
-                    if p_name != "mock":
+                    if not is_mock_turn:
                         provider_attempts.append({
                             "provider": p_name,
                             "status": "success",
@@ -1636,10 +1652,11 @@ class AIGateway:
                         meta.fallback_reason = "; ".join(errors_encountered) if errors_encountered else None
                     else:
                         meta.fallback_reason = "all_real_providers_unavailable" if not errors_encountered else "; ".join(errors_encountered)
+                        meta.provider_attempts = list(provider_attempts)
 
                     self.circuit_breaker.record_success(p_name)
 
-                    if p_name != "mock":
+                    if not is_mock_turn:
                         self._session_metrics["real_llm_calls"] += 1
                         self._session_metrics["calls_per_provider"][p_name] = self._session_metrics["calls_per_provider"].get(p_name, 0) + 1
                     else:
@@ -1653,6 +1670,7 @@ class AIGateway:
                     status_code = getattr(e, "status_code", None) or (429 if "429" in err_msg else 500)
                     category = getattr(e, "category", None) or ("RATE_LIMITED" if status_code == 429 else "FAILED")
                     logger.warning(f"AIGateway: Provider '{p_name}' turn generation attempt {attempt+1} failed: {err_msg[:120]}")
+                    self.circuit_breaker.record_failure(p_name, e, status_code=status_code, category=category)
                     if attempt == max_retries:
                         errors_encountered.append(f"{p_name}_{category.lower()}")
                         provider_attempts.append({
@@ -1674,6 +1692,9 @@ class AIGateway:
         meta.fallback_depth = depth
         meta.fallback_reason = "all_real_providers_unavailable" if not errors_encountered else "; ".join(errors_encountered)
         meta.provider_attempts = list(provider_attempts)
+        meta.real_provider_attempted = len(provider_attempts) > 0
+        meta.real_llm_success = False
+        meta.mock_fallback_used = True
 
         self._session_metrics["deterministic_fallback_calls"] += 1
         self._session_metrics["calls_per_provider"]["mock"] = self._session_metrics["calls_per_provider"].get("mock", 0) + 1

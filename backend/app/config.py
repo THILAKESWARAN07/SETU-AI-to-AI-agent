@@ -37,21 +37,22 @@ class Settings:
     LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
     # Priority & Gateway Settings
-    PRIMARY_LLM_PROVIDER: str = os.getenv("PRIMARY_LLM_PROVIDER", "groq")
-    LLM_PROVIDER_CHAIN: str = os.getenv("LLM_PROVIDER_CHAIN", "groq,gemini,openrouter,mock")
-    CIRCUIT_BREAKER_COOLDOWN_SECONDS: float = float(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "60.0"))
+    PRIMARY_LLM_PROVIDER: str = os.getenv("PRIMARY_LLM_PROVIDER", "gemini")
+    LLM_PROVIDER_CHAIN: str = os.getenv("LLM_PROVIDER_CHAIN", "gemini,groq,openrouter,mock")
+    CIRCUIT_BREAKER_COOLDOWN_SECONDS: float = float(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "30.0"))
+    MAX_REAL_LLM_CALLS: int = int(os.getenv("MAX_REAL_LLM_CALLS", "3"))
 
     # Role-Specific LLM Settings (100% Free / Free-Tier Providers)
-    BUYER_LLM_PROVIDER: str = os.getenv("BUYER_LLM_PROVIDER", "groq")
-    BUYER_LLM_MODEL: str = os.getenv("BUYER_LLM_MODEL", "groq/compound-mini")
-    BUYER_LLM_FALLBACKS: str = os.getenv("BUYER_LLM_FALLBACKS", "gemini,openrouter,mock")
+    BUYER_LLM_PROVIDER: str = os.getenv("BUYER_LLM_PROVIDER", "gemini")
+    BUYER_LLM_MODEL: str = os.getenv("BUYER_LLM_MODEL", "gemini-3.5-flash-lite")
+    BUYER_LLM_FALLBACKS: str = os.getenv("BUYER_LLM_FALLBACKS", "groq,openrouter,mock")
 
     MERCHANT_LLM_PROVIDER: str = os.getenv("MERCHANT_LLM_PROVIDER", "groq")
-    MERCHANT_LLM_MODEL: str = os.getenv("MERCHANT_LLM_MODEL", "groq/compound-mini")
+    MERCHANT_LLM_MODEL: str = os.getenv("MERCHANT_LLM_MODEL", "openai/gpt-oss-20b")
     MERCHANT_LLM_FALLBACKS: str = os.getenv("MERCHANT_LLM_FALLBACKS", "gemini,openrouter,mock")
 
     AUXILIARY_LLM_PROVIDER: str = os.getenv("AUXILIARY_LLM_PROVIDER", "groq")
-    AUXILIARY_LLM_MODEL: str = os.getenv("AUXILIARY_LLM_MODEL", "groq/compound-mini")
+    AUXILIARY_LLM_MODEL: str = os.getenv("AUXILIARY_LLM_MODEL", "openai/gpt-oss-20b")
     AUXILIARY_LLM_FALLBACKS: str = os.getenv("AUXILIARY_LLM_FALLBACKS", "gemini,openrouter,mock")
 
     # API Keys & Models for Free / Fast Providers
@@ -59,10 +60,10 @@ class Settings:
     CEREBRAS_MODEL: str = os.getenv("CEREBRAS_MODEL", "llama3.1-70b")
 
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "groq/compound-mini")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     NVIDIA_NIM_API_KEY: str = os.getenv("NVIDIA_NIM_API_KEY", "")
     NVIDIA_NIM_MODEL: str = os.getenv("NVIDIA_NIM_MODEL", "meta/llama-3.3-70b-instruct")
 
@@ -92,37 +93,38 @@ class Settings:
         self.RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "mockwebhooksecret123")
         self.IS_PAYMENT_TEST_MODE = os.getenv("IS_PAYMENT_TEST_MODE", "True").lower() in ("true", "1", "yes")
         
-        self.PRIMARY_LLM_PROVIDER = os.getenv("PRIMARY_LLM_PROVIDER", "groq")
-        self.LLM_PROVIDER_CHAIN = os.getenv("LLM_PROVIDER_CHAIN", "groq,gemini,openrouter,mock")
-        self.CIRCUIT_BREAKER_COOLDOWN_SECONDS = float(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "60.0"))
+        self.PRIMARY_LLM_PROVIDER = os.getenv("PRIMARY_LLM_PROVIDER", "gemini")
+        self.LLM_PROVIDER_CHAIN = os.getenv("LLM_PROVIDER_CHAIN", "gemini,groq,openrouter,mock")
+        self.CIRCUIT_BREAKER_COOLDOWN_SECONDS = float(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "30.0"))
+        self.MAX_REAL_LLM_CALLS = int(os.getenv("MAX_REAL_LLM_CALLS", "3"))
 
-        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
-        self.LLM_MODEL = os.getenv("LLM_MODEL", "groq/compound-mini")
+        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
+        self.LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite")
         self.LLM_API_KEY = os.getenv("LLM_API_KEY", "")
         self.LLM_FALLBACK_TO_MOCK = os.getenv("LLM_FALLBACK_TO_MOCK", "True").lower() in ("true", "1", "yes")
         self.LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
         self.LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
-        self.BUYER_LLM_PROVIDER = os.getenv("BUYER_LLM_PROVIDER", "groq")
-        self.BUYER_LLM_MODEL = os.getenv("BUYER_LLM_MODEL", "groq/compound-mini")
-        self.BUYER_LLM_FALLBACKS = os.getenv("BUYER_LLM_FALLBACKS", "gemini,openrouter,mock")
+        self.BUYER_LLM_PROVIDER = os.getenv("BUYER_LLM_PROVIDER", "gemini")
+        self.BUYER_LLM_MODEL = os.getenv("BUYER_LLM_MODEL", "gemini-3.5-flash-lite")
+        self.BUYER_LLM_FALLBACKS = os.getenv("BUYER_LLM_FALLBACKS", "groq,openrouter,mock")
 
         self.MERCHANT_LLM_PROVIDER = os.getenv("MERCHANT_LLM_PROVIDER", "groq")
-        self.MERCHANT_LLM_MODEL = os.getenv("MERCHANT_LLM_MODEL", "groq/compound-mini")
+        self.MERCHANT_LLM_MODEL = os.getenv("MERCHANT_LLM_MODEL", "openai/gpt-oss-20b")
         self.MERCHANT_LLM_FALLBACKS = os.getenv("MERCHANT_LLM_FALLBACKS", "gemini,openrouter,mock")
 
         self.AUXILIARY_LLM_PROVIDER = os.getenv("AUXILIARY_LLM_PROVIDER", "groq")
-        self.AUXILIARY_LLM_MODEL = os.getenv("AUXILIARY_LLM_MODEL", "groq/compound-mini")
+        self.AUXILIARY_LLM_MODEL = os.getenv("AUXILIARY_LLM_MODEL", "openai/gpt-oss-20b")
         self.AUXILIARY_LLM_FALLBACKS = os.getenv("AUXILIARY_LLM_FALLBACKS", "gemini,openrouter,mock")
 
         self.CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
         self.CEREBRAS_MODEL = os.getenv("CEREBRAS_MODEL", "llama3.1-70b")
 
         self.GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-        self.GROQ_MODEL = os.getenv("GROQ_MODEL", "groq/compound-mini")
+        self.GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
         self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-        self.GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+        self.GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
         self.NVIDIA_NIM_API_KEY = os.getenv("NVIDIA_NIM_API_KEY", "")
         self.NVIDIA_NIM_MODEL = os.getenv("NVIDIA_NIM_MODEL", "meta/llama-3.3-70b-instruct")

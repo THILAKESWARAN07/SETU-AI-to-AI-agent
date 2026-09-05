@@ -150,7 +150,13 @@ export default function Payment() {
 
   // 1. Create payment transaction on mount
   useEffect(() => {
-    if (!result || paymentCalled.current) return;
+    if (!result || !result.purchase_request_id || result.decision !== 'APPROVED' || paymentCalled.current) {
+      if (result && result.decision !== 'APPROVED') {
+        setError('Payment cannot be processed: Purchase request has not been approved by the Policy Engine.');
+        setLocalStatus('FAILED');
+      }
+      return;
+    }
     
     paymentCalled.current = true;
     setIsSecuring(true);
@@ -306,7 +312,7 @@ export default function Payment() {
 
   // Retry payment without re-running negotiation
   const handleRetryPayment = () => {
-    if (!result) return;
+    if (!result || !result.purchase_request_id || result.decision !== 'APPROVED') return;
     setIsSecuring(true);
     setError(null);
     apiService.createPayment(result.purchase_request_id)

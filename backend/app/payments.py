@@ -52,6 +52,8 @@ class MockRazorpayAdapter(PaymentGatewayAdapter):
         self._webhook_secret = webhook_secret
 
     def create_order(self, amount: Decimal, receipt_id: str) -> Dict[str, Any]:
+        if amount is None or Decimal(str(amount)) <= Decimal("0.00"):
+            raise ValueError("Invalid payment amount: Order amount must be positive and strictly greater than zero.")
         amount_paise = int((amount * Decimal("100")).quantize(Decimal("1")))
         order_id = f"order_mock_{receipt_id}_{amount_paise}"
         logger.info(f"[MOCK PAY] Simulating Order creation: {order_id} for amount {amount}")
@@ -101,6 +103,8 @@ class RazorpayAdapter(PaymentGatewayAdapter):
         self.base_url = "https://api.razorpay.com/v1"
 
     def create_order(self, amount: Decimal, receipt_id: str) -> Dict[str, Any]:
+        if amount is None or Decimal(str(amount)) <= Decimal("0.00"):
+            raise ValueError("Invalid payment amount: Order amount must be positive and strictly greater than zero.")
         amount_paise = int(amount * Decimal("100"))
         
         # Test mode fallback helper
@@ -196,7 +200,7 @@ def process_payment_creation(db: Session, purchase_request_id: int) -> Transacti
             )
             raise ValueError("Purchase request not found")
 
-        # 3. Check if the status is canonical APPROVED
+        # 3. Check if the status is canonical APPROVED and amount is strictly positive
         if pr.status != "APPROVED":
             AuditEngine.log_event(
                 db=db,
@@ -206,9 +210,22 @@ def process_payment_creation(db: Session, purchase_request_id: int) -> Transacti
                 reason=f"Security alert: Blocked payment attempt. Purchase Request status is '{pr.status}', expected 'APPROVED'.",
                 entity_type="PurchaseRequest",
                 entity_id=pr.id,
-                metadata={"amount": str(pr.final_amount)}
+                metadata={"amount": str(pr.final_amount) if pr.final_amount is not None else None}
             )
             raise PermissionError("Purchase request has not been APPROVED by the backend Policy Engine.")
+
+        if pr.final_amount is None or Decimal(str(pr.final_amount)) <= Decimal("0.00"):
+            AuditEngine.log_event(
+                db=db,
+                actor="SYSTEM",
+                action="CREATE_PAYMENT",
+                result="BLOCKED",
+                reason=f"Security alert: Blocked payment attempt. Invalid or non-positive transaction amount: {pr.final_amount}.",
+                entity_type="PurchaseRequest",
+                entity_id=pr.id,
+                metadata={"amount": str(pr.final_amount) if pr.final_amount is not None else None}
+            )
+            raise ValueError("Payment cannot be processed for zero, negative, or missing transaction amounts.")
 
         # 4. Idempotency Check: if a transaction already exists for this purchase request
         existing_tx = db.query(Transaction).filter(

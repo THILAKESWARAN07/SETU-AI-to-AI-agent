@@ -27,8 +27,10 @@ export default function CommerceResult({ result, onNext }: CommerceResultProps) 
     description: "Protective carrying case with integrated lithium-ion battery backup."
   };
 
-  const discountPercent = parseFloat(result.discount_percent);
-  const discountAmount = parseFloat(result.original_amount) - parseFloat(result.final_amount);
+  const discountPercent = result.discount_percent ? parseFloat(result.discount_percent) : null;
+  const discountAmount = result.final_amount && result.original_amount 
+    ? parseFloat(result.original_amount) - parseFloat(result.final_amount) 
+    : null;
 
   return (
     <div className="commerce-result-wrapper animate-fade-in">
@@ -45,7 +47,7 @@ export default function CommerceResult({ result, onNext }: CommerceResultProps) 
             <p>
               {result.decision === 'APPROVED' 
                 ? `Proposal approved under active rules (Policy: ${result.policy_version}).` 
-                : `Proposal blocked due to merchant boundary violations.`}
+                : (result.reasons && result.reasons.length > 0 ? `Proposal blocked: ${result.reasons.join(', ')}` : `Proposal blocked due to merchant boundary violations.`)}
             </p>
           </div>
         </div>
@@ -96,7 +98,9 @@ export default function CommerceResult({ result, onNext }: CommerceResultProps) 
           <span className="card-tag offer">Negotiated Bundle Deal</span>
           <div className="card-header">
             <h4>{result.bundle_offer.name || "SoundWave Bundle"}</h4>
-            <span className="product-id highlight-id">PROPOSAL #{result.purchase_request_id}</span>
+            <span className="product-id highlight-id">
+              {result.purchase_request_id ? `PROPOSAL #${result.purchase_request_id}` : 'BLOCKED PROPOSAL'}
+            </span>
           </div>
           
           <div className="bundle-breakdown">
@@ -111,17 +115,25 @@ export default function CommerceResult({ result, onNext }: CommerceResultProps) 
             <div className="breakdown-divider" />
             <div className="breakdown-row">
               <span>Standard Price</span>
-              <span>₹{parseFloat(result.original_amount).toLocaleString('en-IN')}</span>
+              <span>₹{parseFloat(result.original_amount || '0').toLocaleString('en-IN')}</span>
             </div>
             <div className="breakdown-row discount-text">
-              <span>Negotiated discount ({discountPercent.toFixed(2)}%)</span>
-              <span>- ₹{discountAmount.toLocaleString('en-IN')}</span>
+              <span>Negotiated discount</span>
+              <span>{result.decision === 'APPROVED' && discountPercent !== null && discountAmount !== null ? `${discountPercent.toFixed(2)}% (- ₹${discountAmount.toLocaleString('en-IN')})` : 'N/A'}</span>
             </div>
+            {result.decision !== 'APPROVED' && result.reasons && result.reasons.length > 0 && (
+              <div className="breakdown-row" style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '4px' }}>
+                <span>Block Reason:</span>
+                <span>{result.reasons.join(', ')}</span>
+              </div>
+            )}
           </div>
 
           <div className="card-footer highlight-footer">
             <span className="price-label highlight-label">Final Net Amount</span>
-            <span className="price-value highlight-value">₹{parseFloat(result.final_amount).toLocaleString('en-IN')}</span>
+            <span className="price-value highlight-value">
+              {result.final_amount ? `₹${parseFloat(result.final_amount).toLocaleString('en-IN')}` : 'N/A'}
+            </span>
           </div>
         </div>
       </div>

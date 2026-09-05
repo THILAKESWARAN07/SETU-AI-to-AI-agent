@@ -18,7 +18,9 @@ export default function TransactionSummary({ transaction, result }: TransactionS
     }).format(parsed);
   };
 
-  const discountAmount = parseFloat(result.original_amount) - parseFloat(result.final_amount);
+  const discountAmount = result.final_amount && result.original_amount 
+    ? parseFloat(result.original_amount) - parseFloat(result.final_amount)
+    : 0;
 
   // Retrieve exact accepted proposal snapshot
   const acceptedProposal = result.proposals?.find(p => p.proposal_id === result.accepted_proposal_id);
@@ -119,7 +121,7 @@ export default function TransactionSummary({ transaction, result }: TransactionS
               <span className="font-mono">{formatINR(result.original_amount)}</span>
             </div>
             <div className="price-row text-green font-mono">
-              <span>Negotiated Discount ({parseFloat(result.discount_percent).toFixed(2)}%):</span>
+              <span>Negotiated Discount ({parseFloat(result.discount_percent || '0').toFixed(2)}%):</span>
               <span>- {formatINR(discountAmount)}</span>
             </div>
             <div className="summary-subdivider" />

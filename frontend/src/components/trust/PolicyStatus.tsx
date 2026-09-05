@@ -52,12 +52,16 @@ export default function PolicyStatus({
             </div>
             <div className="comp-metric-item">
               <span className="lbl text-dimmed">Proposed AI Discount:</span>
-              <span className="val text-primary">- {parseFloat(discountPercent).toFixed(2)}%</span>
+              <span className="val text-primary">
+                {isApproved && discountPercent && parseFloat(discountPercent) > 0 ? `- ${parseFloat(discountPercent).toFixed(2)}%` : 'N/A'}
+              </span>
             </div>
             <div className="comp-divider" />
             <div className="comp-metric-item total-row">
               <span className="lbl text-white">Proposed Final Price:</span>
-              <span className="val text-primary font-bold">{formatINR(finalAmount)}</span>
+              <span className="val text-primary font-bold">
+                {isApproved && finalAmount && parseFloat(finalAmount) > 0 ? formatINR(finalAmount) : 'N/A'}
+              </span>
             </div>
           </div>
           <div className="comp-card-desc">

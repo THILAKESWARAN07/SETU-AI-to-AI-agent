@@ -141,14 +141,15 @@ export interface ConversationEvent {
   is_final?: boolean;
   
   // Provider Observability Metadata
-  provider_used?: 'cerebras' | 'groq' | 'gemini' | 'nvidia_nim' | 'openrouter' | 'ollama' | 'mock' | string;
-  provider_type?: 'real_llm' | 'deterministic_fallback';
+  provider_used?: 'cerebras' | 'groq' | 'gemini' | 'nvidia_nim' | 'openrouter' | 'ollama' | 'mock' | 'deterministic_engine' | string;
+  provider_type?: 'real_llm' | 'deterministic_fallback' | 'deterministic_turn' | string;
   model_name?: string;
   agent_role?: 'buyer' | 'merchant' | 'auxiliary' | string;
   fallback_used?: boolean;
   fallback_depth?: number;
   fallback_reason?: string | null;
   response_latency_ms?: number;
+  is_deterministic?: boolean;
 }
 
 export interface DemoCommerceResponse {
@@ -160,13 +161,13 @@ export interface DemoCommerceResponse {
   bundle_offer: Record<string, any>;
   negotiation_history: NegotiationHistoryItem[];
   conversation_events?: ConversationEvent[];
-  purchase_request_id: number;
+  purchase_request_id?: number | null;
   decision: string;
   reasons: string[];
   original_amount: string;
-  final_amount: string;
-  discount_percent: string;
-  margin_percent: string;
+  final_amount?: string | null;
+  discount_percent?: string | null;
+  margin_percent?: string | null;
   policy_version: string;
   basket?: any;
   basket_type?: string;
@@ -178,8 +179,9 @@ export interface DemoCommerceResponse {
   merchant_bundle_proposal?: any;
   proposals?: any[];
   accepted_proposal_id?: string;
-  
-  // Step 10 dynamic params
+  financials?: any;
+
+  // Trace variables
   agent_mode?: string;
   buyer_objective?: string;
   buyer_tools_used?: string[];
@@ -187,6 +189,11 @@ export interface DemoCommerceResponse {
   merchant_objective?: string;
   merchant_tools_used?: string[];
   merchant_confidence?: number;
+  
+  // Stage & Error tracking
+  stage?: string;
+  error_code?: string;
+  status?: string;
   
   // Step 12 metadata
   provider?: string;
@@ -206,15 +213,26 @@ export interface DemoCommerceResponse {
     ollama_calls?: number;
     mock_calls: number;
     real_llm_calls?: number;
+    total_llm_calls?: number;
+    deterministic_turns?: number;
     deterministic_fallback_calls?: number;
     deterministic_fallback_turns?: number;
     provider_failovers?: number;
+    providers_used?: string[];
+    buyer_llm_calls?: number;
+    merchant_llm_calls?: number;
+    llm_budget?: number;
+    llm_budget_remaining?: number;
+    negotiation_duration?: number;
+    mock_fallback_used?: boolean;
+    mock_fallback_status?: string;
     deterministic_operations_avoided?: number;
     estimated_llm_calls_saved?: number;
     fallback_count: number;
     all_agent_turns_used_real_llm?: boolean;
     all_agent_turns_used_gemini?: boolean;
     is_live?: boolean;
+    mode?: string;
   };
 }
 

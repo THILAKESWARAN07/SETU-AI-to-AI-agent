@@ -37,28 +37,36 @@ async def lifespan(app: FastAPI):
     try:
         from backend.app.agents.ai_gateway import get_ai_gateway
         gateway = get_ai_gateway()
+        # Ensure all circuits start fresh in CLOSED state on application start
+        gateway.circuit_breaker.reset()
         status = gateway.get_provider_status()
 
-        cerebras_present = status["providers"]["cerebras"]["configured"]
-        groq_present = status["providers"]["groq"]["configured"]
-        gemini_present = status["providers"]["gemini"]["configured"]
-        nvidia_present = status["providers"]["nvidia_nim"]["configured"]
-        openrouter_present = status["providers"]["openrouter"]["configured"]
-        ollama_present = status["providers"]["ollama"]["configured"]
+        cerebras_present = "configured" if status["providers"]["cerebras"]["configured"] else "not configured"
+        groq_present = "configured" if status["providers"]["groq"]["configured"] else "not configured"
+        gemini_present = "configured" if status["providers"]["gemini"]["configured"] else "not configured"
+        nvidia_present = "configured" if status["providers"]["nvidia_nim"]["configured"] else "not configured"
+        openrouter_present = "configured" if status["providers"]["openrouter"]["configured"] else "not configured"
+        ollama_present = "available" if status["providers"]["ollama"]["configured"] else "unavailable"
 
         buyer_chain = gateway.resolve_chain("buyer")
         merchant_chain = gateway.resolve_chain("merchant")
         aux_chain = gateway.resolve_chain("auxiliary")
 
-        logger.info("=" * 70)
-        logger.info("SETU CENTRAL AI GATEWAY STARTUP DIAGNOSTICS")
-        logger.info(f"Keys Configured: Cerebras={cerebras_present}, Groq={groq_present}, Gemini={gemini_present}, NVIDIA={nvidia_present}, OpenRouter={openrouter_present}, Ollama={ollama_present}")
+        logger.info("=" * 60)
+        logger.info("SETU AI GATEWAY STARTUP")
+        logger.info("=" * 60)
+        logger.info(f"Gemini key:     {gemini_present}")
+        logger.info(f"Groq key:       {groq_present}")
+        logger.info(f"OpenRouter key: {openrouter_present}")
+        logger.info(f"Cerebras key:   {cerebras_present}")
+        logger.info(f"NVIDIA key:     {nvidia_present}")
+        logger.info(f"Ollama:         {ollama_present}")
         logger.info(f"Buyer Chain:     {' -> '.join(buyer_chain)}")
         logger.info(f"Merchant Chain:  {' -> '.join(merchant_chain)}")
         logger.info(f"Auxiliary Chain: {' -> '.join(aux_chain)}")
-        logger.info("Circuit Breaker: ACTIVE (Fast 0ms bypass on 429 / rate limits / auth errors)")
-        logger.info("Deterministic Logic: 100% Python/SQL tools (Catalog, Policy, Margin, Payment, Audit)")
-        logger.info("=" * 70)
+        logger.info("Circuit Breakers: All initialized CLOSED (cooldown recovery active)")
+        logger.info("Deterministic Tools: 100% Python/SQL (Catalog, Policy, Margin, Payment, Audit)")
+        logger.info("=" * 60)
     except Exception as e:
         logger.warning(f"Could not log AI Gateway startup diagnostics: {e}")
 

@@ -92,6 +92,9 @@ class ProviderExecutionMetadata(BaseModel):
     fallback_reason: Optional[str] = Field(default=None, description="Reason/error for falling back")
     response_latency_ms: float = Field(default=0.0, description="Response time in milliseconds")
     provider_attempts: List[Dict[str, Any]] = Field(default_factory=list, description="Sanitized audit log of provider attempts during failover")
+    real_provider_attempted: bool = Field(default=False, description="Whether a real LLM provider was attempted")
+    real_llm_success: bool = Field(default=False, description="Whether a real LLM provider succeeded")
+    mock_fallback_used: bool = Field(default=False, description="Whether MockProvider fallback was used")
 
 
 # --- PROVIDER INTERFACE ---
@@ -1544,10 +1547,10 @@ class MultiFallbackProvider(LLMProvider):
 
     @property
     def agent_mode(self) -> str:
-        current = self.providers[min(self.active_provider_idx, len(self.providers) - 1)]
-        if isinstance(current, MockProvider):
-            return "OFFLINE MOCK" if self.active_provider_idx == 0 else "FALLBACK MOCK"
-        return f"LIVE LLM ({current.provider_name})"
+        real_providers = [p for p in self.providers if not isinstance(p, MockProvider)]
+        if real_providers:
+            return "LIVE MULTI-PROVIDER"
+        return "OFFLINE MOCK"
 
     @property
     def provider_name(self) -> str:
@@ -1565,6 +1568,8 @@ class MultiFallbackProvider(LLMProvider):
 
         errors = []
         overall_start_t = time.perf_counter()
+        self.active_provider_idx = 0
+
         for depth, provider in enumerate(self.providers):
             try:
                 # If pure MockProvider, run synchronously without thread overhead
@@ -1595,7 +1600,10 @@ class MultiFallbackProvider(LLMProvider):
                     fallback_used=depth > 0,
                     fallback_depth=depth,
                     fallback_reason="; ".join(errors) if depth > 0 else None,
-                    response_latency_ms=latency_ms
+                    response_latency_ms=latency_ms,
+                    real_provider_attempted=not is_mock or depth > 0,
+                    real_llm_success=not is_mock,
+                    mock_fallback_used=is_mock
                 )
                 self.active_provider_idx = depth
                 return res
@@ -1614,6 +1622,8 @@ class MultiFallbackProvider(LLMProvider):
 
         errors = []
         overall_start_t = time.perf_counter()
+        self.active_provider_idx = 0
+
         for depth, provider in enumerate(self.providers):
             try:
                 if type(provider) is MockProvider:
@@ -1643,7 +1653,10 @@ class MultiFallbackProvider(LLMProvider):
                     fallback_used=depth > 0,
                     fallback_depth=depth,
                     fallback_reason="; ".join(errors) if depth > 0 else None,
-                    response_latency_ms=latency_ms
+                    response_latency_ms=latency_ms,
+                    real_provider_attempted=not is_mock or depth > 0,
+                    real_llm_success=not is_mock,
+                    mock_fallback_used=is_mock
                 )
                 self.active_provider_idx = depth
                 return res
@@ -1665,41 +1678,38 @@ class FallbackProvider(MultiFallbackProvider):
 
 class AgentProviderRouter:
     """
-    Router that constructs isolated provider instances and fallback chains per agent role.
+    Central router directing tasks to appropriate LLM providers with automatic fallbacks.
     """
-    @staticmethod
-    def create_single_provider(provider_type: str, model_name: Optional[str] = None) -> Optional[LLMProvider]:
-        provider_type = provider_type.strip().lower()
-        if not provider_type:
-            return None
-
+    @classmethod
+    def create_single_provider(cls, provider_type: str, model_name: Optional[str] = None) -> Optional[LLMProvider]:
         from backend.app.config import settings
+        provider_type = provider_type.lower().strip()
 
         if provider_type == "gemini":
-            key = os.environ.get("LLM_API_KEY", os.environ.get("GEMINI_API_KEY", getattr(settings, "GEMINI_API_KEY", "")))
+            key = os.environ.get("LLM_API_KEY") or os.environ.get("GEMINI_API_KEY", getattr(settings, "GEMINI_API_KEY", None))
             if key and str(key).strip():
                 try:
-                    m_name = model_name or os.environ.get("LLM_MODEL", os.environ.get("GEMINI_MODEL", os.environ.get("BUYER_LLM_MODEL", getattr(settings, "GEMINI_MODEL", None))))
+                    m_name = model_name or os.environ.get("LLM_MODEL") or os.environ.get("GEMINI_MODEL", getattr(settings, "GEMINI_MODEL", "gemini-3.5-flash-lite"))
                     return GeminiProvider(api_key=str(key).strip(), model_name=m_name)
                 except Exception as e:
                     logger.warning(f"Could not initialize GeminiProvider: {e}")
             return None
 
         elif provider_type == "openrouter":
-            key = os.environ.get("LLM_API_KEY", os.environ.get("OPENROUTER_API_KEY", getattr(settings, "OPENROUTER_API_KEY", "")))
+            key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENROUTER_API_KEY", getattr(settings, "OPENROUTER_API_KEY", None))
             if key and str(key).strip():
                 try:
-                    m_name = model_name or os.environ.get("LLM_MODEL", os.environ.get("OPENROUTER_MODEL", getattr(settings, "OPENROUTER_MODEL", None)))
+                    m_name = model_name or os.environ.get("LLM_MODEL") or os.environ.get("OPENROUTER_MODEL", getattr(settings, "OPENROUTER_MODEL", "dots-studio/dots-3-note-preview:free"))
                     return OpenRouterProvider(api_key=str(key).strip(), model_name=m_name)
                 except Exception as e:
                     logger.warning(f"Could not initialize OpenRouterProvider: {e}")
             return None
 
         elif provider_type == "groq":
-            key = os.environ.get("LLM_API_KEY", os.environ.get("GROQ_API_KEY", getattr(settings, "GROQ_API_KEY", "")))
+            key = os.environ.get("LLM_API_KEY") or os.environ.get("GROQ_API_KEY", getattr(settings, "GROQ_API_KEY", None))
             if key and str(key).strip():
                 try:
-                    m_name = model_name or os.environ.get("LLM_MODEL", os.environ.get("GROQ_MODEL", getattr(settings, "GROQ_MODEL", None)))
+                    m_name = model_name or os.environ.get("LLM_MODEL") or os.environ.get("GROQ_MODEL", getattr(settings, "GROQ_MODEL", "openai/gpt-oss-20b"))
                     return GroqProvider(api_key=str(key).strip(), model_name=m_name)
                 except Exception as e:
                     logger.warning(f"Could not initialize GroqProvider: {e}")
@@ -1719,17 +1729,17 @@ class AgentProviderRouter:
         legacy_model = os.getenv("LLM_MODEL")
 
         if role == "buyer":
-            primary_name = legacy_override or os.getenv("BUYER_LLM_PROVIDER") or settings.BUYER_LLM_PROVIDER
-            primary_model = legacy_model or os.getenv("BUYER_LLM_MODEL") or settings.BUYER_LLM_MODEL
-            fallbacks_raw = os.getenv("BUYER_LLM_FALLBACKS", settings.BUYER_LLM_FALLBACKS)
+            primary_name = legacy_override or os.getenv("BUYER_LLM_PROVIDER") or getattr(settings, "BUYER_LLM_PROVIDER", None) or "gemini"
+            primary_model = legacy_model or os.getenv("BUYER_LLM_MODEL") or getattr(settings, "BUYER_LLM_MODEL", None) or "gemini-3.5-flash-lite"
+            fallbacks_raw = os.getenv("BUYER_LLM_FALLBACKS") or getattr(settings, "BUYER_LLM_FALLBACKS", "groq,openrouter,mock")
         elif role == "merchant":
-            primary_name = os.getenv("MERCHANT_LLM_PROVIDER") or legacy_override or settings.MERCHANT_LLM_PROVIDER
-            primary_model = os.getenv("MERCHANT_LLM_MODEL") or legacy_model or settings.MERCHANT_LLM_MODEL
-            fallbacks_raw = os.getenv("MERCHANT_LLM_FALLBACKS", settings.MERCHANT_LLM_FALLBACKS)
+            primary_name = legacy_override or os.getenv("MERCHANT_LLM_PROVIDER") or getattr(settings, "MERCHANT_LLM_PROVIDER", None) or "groq"
+            primary_model = legacy_model or os.getenv("MERCHANT_LLM_MODEL") or getattr(settings, "MERCHANT_LLM_MODEL", None) or "openai/gpt-oss-20b"
+            fallbacks_raw = os.getenv("MERCHANT_LLM_FALLBACKS") or getattr(settings, "MERCHANT_LLM_FALLBACKS", "gemini,openrouter,mock")
         else:
-            primary_name = os.getenv("AUXILIARY_LLM_PROVIDER") or legacy_override or settings.AUXILIARY_LLM_PROVIDER
-            primary_model = os.getenv("AUXILIARY_LLM_MODEL") or legacy_model or settings.AUXILIARY_LLM_MODEL
-            fallbacks_raw = os.getenv("AUXILIARY_LLM_FALLBACKS", settings.AUXILIARY_LLM_FALLBACKS)
+            primary_name = legacy_override or os.getenv("AUXILIARY_LLM_PROVIDER") or getattr(settings, "AUXILIARY_LLM_PROVIDER", None) or "groq"
+            primary_model = legacy_model or os.getenv("AUXILIARY_LLM_MODEL") or getattr(settings, "AUXILIARY_LLM_MODEL", None) or "openai/gpt-oss-20b"
+            fallbacks_raw = os.getenv("AUXILIARY_LLM_FALLBACKS") or getattr(settings, "AUXILIARY_LLM_FALLBACKS", "gemini,openrouter,mock")
 
         if primary_name.lower() == "mock":
             return MockProvider(agent_role=role)
@@ -1742,7 +1752,7 @@ class AgentProviderRouter:
             chain.append(primary_inst)
 
         # 2. Fallbacks (only if fallback is allowed)
-        fallback_allowed = os.getenv("LLM_FALLBACK_TO_MOCK", str(settings.LLM_FALLBACK_TO_MOCK)).lower() in ("true", "1", "yes")
+        fallback_allowed = os.getenv("LLM_FALLBACK_TO_MOCK", str(getattr(settings, "LLM_FALLBACK_TO_MOCK", True))).lower() in ("true", "1", "yes")
         if fallback_allowed:
             fallback_names = [f.strip() for f in fallbacks_raw.split(",") if f.strip()]
             for fb_name in fallback_names:

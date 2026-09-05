@@ -251,13 +251,13 @@ class DemoCommerceResponse(BaseModel):
     bundle_offer: Dict[str, Any] = Field(default_factory=dict)
     negotiation_history: List[Dict[str, Any]] = Field(default_factory=list)
     conversation_events: List[Dict[str, Any]] = Field(default_factory=list)
-    purchase_request_id: int = 0
+    purchase_request_id: Optional[int] = None
     decision: str = "REJECTED"
     reasons: List[str] = Field(default_factory=list)
     original_amount: str = "0.00"
-    final_amount: str = "0.00"
-    discount_percent: str = "0.00"
-    margin_percent: str = "0.00"
+    final_amount: Optional[str] = None
+    discount_percent: Optional[str] = None
+    margin_percent: Optional[str] = None
     policy_version: str = "policy_v1.0"
     basket: Optional[Dict[str, Any]] = None
     basket_type: Optional[str] = "STANDALONE"

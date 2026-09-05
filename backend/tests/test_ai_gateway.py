@@ -20,12 +20,20 @@ from backend.app.agents.ai_gateway import (
     ProviderExecutionMetadata,
     ProviderFailure,
     FailureCategory,
-    parse_deterministic_intent
+    parse_deterministic_intent,
+    circuit_breaker
 )
 from backend.app.policy import PolicyEngine
 from backend.app.agents.tools import search_catalog_tool, view_product_tool, get_policy_constraints_tool, get_inventory_tool
 from backend.app.database import get_db, SessionLocal
 from backend.seed import seed_db
+
+
+@pytest.fixture(autouse=True)
+def reset_circuit_breaker():
+    circuit_breaker.reset()
+    yield
+    circuit_breaker.reset()
 
 
 # ==============================================================================

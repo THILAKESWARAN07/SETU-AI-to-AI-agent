@@ -57,14 +57,15 @@ interface ChatMessage {
   timestamp: string;
   basketItems?: any[];
   isFinal?: boolean;
-  providerUsed?: 'gemini' | 'openrouter' | 'groq' | 'mock' | string;
-  providerType?: 'real_llm' | 'deterministic_fallback';
+  providerUsed?: 'gemini' | 'openrouter' | 'groq' | 'mock' | 'deterministic_engine' | string;
+  providerType?: 'real_llm' | 'deterministic_fallback' | 'deterministic_turn' | string;
   agentRole?: string;
   modelName?: string;
   fallbackUsed?: boolean;
   fallbackDepth?: number;
   fallbackReason?: string | null;
   responseLatencyMs?: number;
+  isDeterministic?: boolean;
 }
 
 const mapEventToMessage = (evt: ConversationEvent, idx: number): ChatMessage => {
@@ -105,7 +106,8 @@ const mapEventToMessage = (evt: ConversationEvent, idx: number): ChatMessage => 
     fallbackUsed: evt.fallback_used,
     fallbackDepth: evt.fallback_depth,
     fallbackReason: evt.fallback_reason,
-    responseLatencyMs: evt.response_latency_ms
+    responseLatencyMs: evt.response_latency_ms,
+    isDeterministic: evt.is_deterministic || evt.provider_used === 'deterministic_engine' || evt.provider_type === 'deterministic_turn'
   };
 };
 
@@ -206,9 +208,13 @@ export default function Negotiation() {
 
         // Sync final catalog price & negotiated prices
         const origAmt = parseFloat(finalRes.original_amount || '0');
-        const finAmt = parseFloat(finalRes.final_amount || '0');
+        const finAmt = finalRes.final_amount ? parseFloat(finalRes.final_amount) : null;
         if (origAmt > 0) setLiveCatalogPrice(origAmt);
-        if (finAmt > 0) setLiveFinalPrice(finAmt);
+        if (finAmt !== null && finAmt > 0 && finalRes.decision !== 'BLOCKED' && finalRes.decision !== 'REJECTED') {
+          setLiveFinalPrice(finAmt);
+        } else {
+          setLiveFinalPrice(null);
+        }
 
         const buyerOpeningVal = parseFloat(String(
           finalRes.buyer_opening_offer?.offered_amount ||
@@ -268,9 +274,13 @@ export default function Negotiation() {
               setMessages(mapped);
             }
             const origAmt = parseFloat(fallbackRes.original_amount || '0');
-            const finAmt = parseFloat(fallbackRes.final_amount || '0');
+            const finAmt = fallbackRes.final_amount ? parseFloat(fallbackRes.final_amount) : null;
             if (origAmt > 0) setLiveCatalogPrice(origAmt);
-            if (finAmt > 0) setLiveFinalPrice(finAmt);
+            if (finAmt !== null && finAmt > 0 && fallbackRes.decision !== 'BLOCKED' && fallbackRes.decision !== 'REJECTED') {
+              setLiveFinalPrice(finAmt);
+            } else {
+              setLiveFinalPrice(null);
+            }
 
             const fbBuyerOpeningVal = parseFloat(String(
               fallbackRes.buyer_opening_offer?.offered_amount ||
@@ -330,9 +340,13 @@ export default function Negotiation() {
         setMessages(initialResult.conversation_events.map((e, idx) => mapEventToMessage(e, idx)));
       }
       const origAmt = parseFloat(initialResult.original_amount || '0');
-      const finAmt = parseFloat(initialResult.final_amount || '0');
+      const finAmt = initialResult.final_amount ? parseFloat(initialResult.final_amount) : null;
       if (origAmt > 0) setLiveCatalogPrice(origAmt);
-      if (finAmt > 0) setLiveFinalPrice(finAmt);
+      if (finAmt !== null && finAmt > 0 && initialResult.decision !== 'BLOCKED' && initialResult.decision !== 'REJECTED') {
+        setLiveFinalPrice(finAmt);
+      } else {
+        setLiveFinalPrice(null);
+      }
       if (initialResult.buyer_opening_offer?.offered_amount) {
         setLiveBuyerOpeningOffer(parseFloat(String(initialResult.buyer_opening_offer.offered_amount)));
       }
@@ -536,7 +550,7 @@ export default function Negotiation() {
             <div className="price-step-item">
               <span className="price-step-label">Agreed Final</span>
               <span className={`price-step-val ${isDealApproved ? 'highlight-green' : isDealBlocked ? 'highlight-red' : ''}`}>
-                {isDealApproved && liveFinalPrice ? `₹${liveFinalPrice.toLocaleString('en-IN')}` : isDealRequiresApproval && liveFinalPrice ? `₹${liveFinalPrice.toLocaleString('en-IN')} (Pending)` : isDealBlocked ? 'BLOCKED' : 'Pending...'}
+                {isDealApproved && liveFinalPrice ? `₹${liveFinalPrice.toLocaleString('en-IN')}` : isDealRequiresApproval && liveFinalPrice ? `₹${liveFinalPrice.toLocaleString('en-IN')} (Pending)` : isDealBlocked ? 'N/A' : 'Pending...'}
               </span>
               {isDealApproved && liveFinalPrice && (() => {
                 const basePrice = result?.basket?.original_total ? parseFloat(result.basket.original_total) : (liveCatalogPrice > 0 ? liveCatalogPrice : 0);
@@ -756,7 +770,7 @@ export default function Negotiation() {
                             )}
                           </span>
                         )}
-                        {msg.providerUsed === 'mock' && !msg.fallbackUsed && (
+                        {msg.providerUsed === 'mock' && !msg.fallbackUsed && !msg.isDeterministic && (
                           <span className="font-mono" style={{ 
                             fontSize: '0.65rem', 
                             padding: '2px 7px', 
@@ -773,6 +787,22 @@ export default function Negotiation() {
                             {msg.responseLatencyMs !== undefined && msg.responseLatencyMs > 0 && (
                               <span style={{ color: 'rgba(255,255,255,0.5)', marginLeft: '2px' }}>{Math.round(msg.responseLatencyMs)}ms</span>
                             )}
+                          </span>
+                        )}
+                        {(msg.isDeterministic || msg.providerUsed === 'deterministic_engine' || msg.providerType === 'deterministic_turn') && (
+                          <span className="font-mono" style={{ 
+                            fontSize: '0.65rem', 
+                            padding: '2px 7px', 
+                            borderRadius: '4px', 
+                            background: 'rgba(52, 211, 153, 0.15)', 
+                            color: '#34d399', 
+                            border: '1px solid rgba(52, 211, 153, 0.3)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }} title="Deterministic Policy & Pricing Convergence">
+                            <span>⚙️</span>
+                            <span>Deterministic Engine</span>
                           </span>
                         )}
                       </div>
@@ -984,9 +1014,27 @@ export default function Negotiation() {
                   fontWeight: 900, 
                   color: isDealApproved ? '#10b981' : isDealRequiresApproval ? '#f59e0b' : isDealBlocked ? '#ef4444' : '#60a5fa' 
                 }}>
-                  {isDealApproved ? 'APPROVED' : isDealRequiresApproval ? 'REQUIRES APPROVAL' : isDealBlocked ? 'REJECTED' : 'PENDING NEGOTIATION'}
+                  {isDealApproved ? 'APPROVED' : isDealRequiresApproval ? 'REQUIRES APPROVAL' : isDealBlocked ? 'BLOCKED' : 'PENDING NEGOTIATION'}
                 </span>
               </div>
+
+              {isDealBlocked && (
+                <div style={{ 
+                  background: 'rgba(239, 68, 68, 0.08)', 
+                  border: '1px solid rgba(239, 68, 68, 0.3)', 
+                  borderRadius: '8px', 
+                  padding: '10px 12px' 
+                }}>
+                  <span className="font-mono" style={{ fontSize: '0.65rem', fontWeight: 700, color: '#ef4444', display: 'block' }}>
+                    DETERMINISTIC BLOCK REASON
+                  </span>
+                  <span style={{ fontSize: '0.74rem', color: '#fca5a5', lineHeight: '1.4', display: 'block', marginTop: '3px' }}>
+                    {result?.reasons && result.reasons.length > 0 
+                      ? result.reasons.join('. ') 
+                      : 'Proposed transaction was blocked by merchant margin, floor price, or inventory policy constraints.'}
+                  </span>
+                </div>
+              )}
 
               {/* Provider Observability & AI Gateway Card */}
               <div style={{
@@ -1021,13 +1069,16 @@ export default function Negotiation() {
                   <div style={{ background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
                     <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.62rem' }}>Real LLM Calls</span>
                     <span className="font-mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: '#38bdf8' }}>
-                      {result?.provider_summary?.real_llm_calls ?? messages.filter(m => m.providerUsed && m.providerUsed !== 'mock' && !m.fallbackUsed).length}
+                      {result?.provider_summary?.real_llm_calls ?? messages.filter(m => m.providerUsed && m.providerUsed !== 'mock' && m.providerUsed !== 'deterministic_engine' && !m.fallbackUsed && !m.isDeterministic).length}
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-dimmed)', marginLeft: '4px' }}>
+                        / {result?.provider_summary?.llm_budget ?? 3} max
+                      </span>
                     </span>
                   </div>
                   <div style={{ background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.62rem' }}>Deterministic Fallback</span>
-                    <span className="font-mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: '#fbbf24' }}>
-                      {result?.provider_summary?.deterministic_fallback_turns ?? result?.provider_summary?.deterministic_fallback_calls ?? messages.filter(m => m.providerUsed === 'mock' || m.fallbackUsed).length}
+                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.62rem' }}>Deterministic Turns</span>
+                    <span className="font-mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: '#34d399' }}>
+                      {result?.provider_summary?.deterministic_turns ?? messages.filter(m => m.isDeterministic || m.providerUsed === 'deterministic_engine').length}
                     </span>
                   </div>
                   <div style={{ background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
@@ -1037,11 +1088,18 @@ export default function Negotiation() {
                     </span>
                   </div>
                   <div style={{ background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.62rem' }}>Deterministic Ops Avoided</span>
-                    <span className="font-mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: '#34d399' }}>
-                      {result?.provider_summary?.deterministic_operations_avoided ?? 12}
+                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.62rem' }}>Mock Fallback</span>
+                    <span className="font-mono" style={{ fontSize: '0.78rem', fontWeight: 700, color: result?.provider_summary?.mock_fallback_used ? '#fbbf24' : '#10b981' }}>
+                      {result?.provider_summary?.mock_fallback_status || (result?.provider_summary?.mock_calls ? 'USED' : 'NOT USED')}
                     </span>
                   </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.66rem', color: 'var(--text-muted)', padding: '2px 4px' }}>
+                  <span>Providers Used:</span>
+                  <span className="font-mono" style={{ color: '#818cf8', fontWeight: 600 }}>
+                    {result?.provider_summary?.providers_used?.length ? result.provider_summary.providers_used.join(' → ') : (result?.provider_summary?.real_llm_calls ? 'Gemini → Groq' : 'None')}
+                  </span>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.66rem', color: 'var(--text-muted)', padding: '2px 4px' }}>
@@ -1126,13 +1184,15 @@ export default function Negotiation() {
             {/* Total & Checkout Action */}
             <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Negotiated Total:</span>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                  {isDealBlocked ? 'Final Price:' : isDealRequiresApproval ? 'Proposed Total:' : 'Negotiated Total:'}
+                </span>
                 <span className="font-mono" style={{ 
                   fontSize: '1.25rem', 
                   fontWeight: 800, 
-                  color: isDealApproved ? '#10b981' : isDealBlocked ? '#ef4444' : '#60a5fa' 
+                  color: isDealApproved ? '#10b981' : isDealBlocked ? '#ef4444' : isDealRequiresApproval ? '#fbbf24' : '#60a5fa' 
                 }}>
-                  {isDealApproved && liveFinalPrice ? `₹${liveFinalPrice.toLocaleString('en-IN')}` : isDealBlocked ? 'BLOCKED' : isNegotiating ? 'Negotiating...' : '—'}
+                  {isDealApproved && liveFinalPrice ? `₹${liveFinalPrice.toLocaleString('en-IN')}` : isDealRequiresApproval && liveFinalPrice ? `₹${liveFinalPrice.toLocaleString('en-IN')}` : isDealBlocked ? 'N/A' : isNegotiating ? 'Negotiating...' : '—'}
                 </span>
               </div>
 
