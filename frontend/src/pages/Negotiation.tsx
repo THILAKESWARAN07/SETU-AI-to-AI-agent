@@ -1025,6 +1025,18 @@ export default function Negotiation() {
                     </span>
                   </div>
                   <div style={{ background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.62rem' }}>Deterministic Fallback</span>
+                    <span className="font-mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: '#fbbf24' }}>
+                      {result?.provider_summary?.deterministic_fallback_turns ?? result?.provider_summary?.deterministic_fallback_calls ?? messages.filter(m => m.providerUsed === 'mock' || m.fallbackUsed).length}
+                    </span>
+                  </div>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                    <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.62rem' }}>Provider Failovers</span>
+                    <span className="font-mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: '#c084fc' }}>
+                      {result?.provider_summary?.provider_failovers ?? (result?.provider_summary?.fallback_count || 0)}
+                    </span>
+                  </div>
+                  <div style={{ background: 'rgba(0,0,0,0.25)', padding: '6px 8px', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
                     <span style={{ color: 'var(--text-dimmed)', display: 'block', fontSize: '0.62rem' }}>Deterministic Ops Avoided</span>
                     <span className="font-mono" style={{ fontSize: '0.85rem', fontWeight: 700, color: '#34d399' }}>
                       {result?.provider_summary?.deterministic_operations_avoided ?? 12}
@@ -1041,7 +1053,7 @@ export default function Negotiation() {
 
                 {result?.provider_summary?.fallback_count ? (
                   <div style={{ fontSize: '0.65rem', color: '#fbbf24', background: 'rgba(245, 158, 11, 0.08)', padding: '4px 6px', borderRadius: '4px', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
-                    ⚠️ {result.provider_summary.fallback_count} turn(s) handled by circuit breaker / fallback provider.
+                    ⚠️ {result.provider_summary.fallback_count} turn(s) handled by fallback provider / circuit breaker.
                   </div>
                 ) : null}
               </div>

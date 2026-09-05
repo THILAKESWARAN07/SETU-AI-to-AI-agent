@@ -1020,6 +1020,7 @@ class MockProvider(BaseLLMProvider):
             prod_name = "Product"
             cat_price = Decimal("1000.00")
             budget = Decimal("1200.00")
+            floor_price = Decimal("850.00")
             round_num = 1
 
             if context:
@@ -1028,42 +1029,91 @@ class MockProvider(BaseLLMProvider):
                 prod_name = prod_details.get("name", "Product")
                 cat_price = context.catalog_price
                 budget = context.buyer_max_budget
+                floor_price = context.merchant_min_price
                 round_num = context.current_round
             elif "samsung" in prompt_lower:
                 prod_id = 41
                 prod_name = "Samsung Galaxy A15"
                 cat_price = Decimal("12999.00")
                 budget = Decimal("14000.00")
+                floor_price = Decimal("11049.15")
             elif "earbud" in prompt_lower:
                 prod_id = 1
                 prod_name = "Wireless Noise-Canceling Earbuds"
                 cat_price = Decimal("1599.00")
                 budget = Decimal("2000.00")
+                floor_price = Decimal("1359.15")
 
-            is_round_1 = (round_num == 1) or ("round 1" in prompt_lower) or ("opening offer" in prompt_lower)
-            
-            # Opening offer calculation (85% of catalog or within budget)
+            is_round_1 = (round_num == 1) if context else bool("round 1" in prompt_lower or "opening offer" in prompt_lower)
+
             if is_round_1:
-                unit_p = min(budget, (cat_price * Decimal("0.85")).quantize(Decimal("0.01")))
+                # Opening offer targeting ~15% discount (bounded by budget and floor)
+                target_discount_price = (cat_price * Decimal("0.85")).quantize(Decimal("1.00"))
+                unit_p = min(budget, max(floor_price, target_discount_price))
                 action = "OFFER"
-                rationale = f"Deterministic initial buyer offer targeting ~15% discount within budget ceiling of INR {budget:.2f}."
+                rationale = f"Deterministic opening buyer offer targeting a ~15% discount at INR {unit_p:.2f} within budget ceiling INR {budget:.2f}."
                 msg = f"Hi, I would like to offer INR {unit_p:.2f} for {prod_name}."
             else:
-                # Evaluation of merchant counter-offer
                 last_merchant_price = None
                 if context and context.current_proposal:
-                    last_merchant_price = Decimal(str(context.current_proposal.get("total_amount", 0)))
+                    try:
+                        last_merchant_price = Decimal(str(context.current_proposal.get("total_amount", 0)))
+                    except Exception:
+                        pass
 
-                if last_merchant_price and last_merchant_price <= budget:
-                    action = "ACCEPT"
-                    unit_p = last_merchant_price
-                    rationale = f"Merchant counter-offer of INR {unit_p:.2f} is within buyer budget of INR {budget:.2f}. Accepted."
-                    msg = f"Deal agreed at INR {unit_p:.2f} for {prod_name}."
+                last_buyer_price = min(budget, max(floor_price, (cat_price * Decimal("0.85")).quantize(Decimal("1.00"))))
+                if context and context.previous_offers:
+                    for off in reversed(context.previous_offers):
+                        actor_str = str(off.get("actor") or off.get("agent_role") or "").upper()
+                        if "BUYER" in actor_str:
+                            try:
+                                last_buyer_price = Decimal(str(off.get("amount") or off.get("unit_price") or off.get("total_amount")))
+                                break
+                            except Exception:
+                                pass
+
+                if last_merchant_price is None:
+                    last_merchant_price = cat_price
+
+                # Check budget constraint
+                if last_merchant_price > budget:
+                    if round_num >= 4:
+                        action = "REJECT"
+                        unit_p = Decimal("0.00")
+                        rationale = f"Merchant counter-offer INR {last_merchant_price:.2f} exceeds buyer budget INR {budget:.2f}. Rejected."
+                        msg = f"Unfortunately INR {last_merchant_price:.2f} exceeds my budget limit of INR {budget:.2f}. I cannot proceed."
+                    else:
+                        action = "COUNTER"
+                        unit_p = min(budget, last_buyer_price + Decimal("50.00"))
+                        rationale = f"Merchant offer exceeds budget. Countering at budget-bounded INR {unit_p:.2f}."
+                        msg = f"Can you meet at INR {unit_p:.2f} within my budget for {prod_name}?"
                 else:
-                    action = "COUNTER"
-                    unit_p = min(budget, (cat_price * Decimal("0.90")).quantize(Decimal("0.01")))
-                    rationale = f"Countering with revised offer of INR {unit_p:.2f} within budget limit."
-                    msg = f"Can you meet at INR {unit_p:.2f} for {prod_name}?"
+                    gap = last_merchant_price - last_buyer_price
+                    # If gap is small (<= 35 INR), or merchant already matched/undercut buyer offer, accept
+                    if gap <= Decimal("35.00") or last_merchant_price <= last_buyer_price:
+                        action = "ACCEPT"
+                        unit_p = last_merchant_price
+                        rationale = f"Merchant counter-offer INR {unit_p:.2f} is within acceptable spread and budget ceiling (INR {budget:.2f}). Accepted."
+                        msg = f"Deal agreed at INR {unit_p:.2f} for {prod_name}."
+                    elif round_num >= 4:
+                        # Final round: accept if within budget and below catalog price
+                        action = "ACCEPT"
+                        unit_p = last_merchant_price
+                        rationale = f"Final round agreement at merchant counter-offer INR {unit_p:.2f} within budget (INR {budget:.2f})."
+                        msg = f"Since this is our final round, I'm happy to accept INR {unit_p:.2f} for {prod_name}."
+                    else:
+                        # Realistic gradual concession: move 40% of the spread toward merchant
+                        concession = max(Decimal("30.00"), (gap * Decimal("0.40")).quantize(Decimal("1.00")))
+                        unit_p = min(budget, min(last_merchant_price, last_buyer_price + concession))
+                        if unit_p >= last_merchant_price:
+                            action = "ACCEPT"
+                            unit_p = last_merchant_price
+                            rationale = f"Concession reached merchant counter-offer INR {unit_p:.2f}. Accepted."
+                            msg = f"I accept your offer of INR {unit_p:.2f} for {prod_name}."
+                        else:
+                            action = "COUNTER"
+                            rationale = f"Countering with gradual concession of INR {unit_p:.2f} toward merchant price."
+                            msg = f"Can you meet at INR {unit_p:.2f} for {prod_name}?"
 
             return schema(
                 action=action,
@@ -1095,6 +1145,7 @@ class MockProvider(BaseLLMProvider):
             prod_name = "Product"
             cat_price = Decimal("1000.00")
             floor_price = Decimal("900.00")
+            round_num = 1
 
             if context:
                 prod_details = context.current_product or {}
@@ -1102,6 +1153,7 @@ class MockProvider(BaseLLMProvider):
                 prod_name = prod_details.get("name", "Product")
                 cat_price = context.catalog_price
                 floor_price = context.merchant_min_price
+                round_num = context.current_round
             elif "samsung" in prompt_lower:
                 prod_id = 41
                 prod_name = "Samsung Galaxy A15"
@@ -1115,19 +1167,79 @@ class MockProvider(BaseLLMProvider):
 
             last_buyer_offer = None
             if context and context.current_proposal:
-                last_buyer_offer = Decimal(str(context.current_proposal.get("total_amount", 0)))
+                try:
+                    last_buyer_offer = Decimal(str(context.current_proposal.get("total_amount", 0)))
+                except Exception:
+                    pass
 
-            if last_buyer_offer and last_buyer_offer >= floor_price:
+            bundle_proposal = None
+
+            # 1. Predatory offer check
+            if last_buyer_offer and (last_buyer_offer <= floor_price * Decimal("0.40") or last_buyer_offer <= Decimal("100.00")):
+                action = "REJECT"
+                unit_p = cat_price
+                rationale = f"Buyer offer of INR {last_buyer_offer:.2f} is predatory and severely below cost/margin floor of INR {floor_price:.2f}."
+                msg = f"I'm sorry, an offer of INR {last_buyer_offer:.2f} is severely below our product cost. I cannot accept this offer."
+                margin_check = f"Margin check: FAILED (Predatory offer below 40% floor)"
+
+            # 2. Zero discount policy / floor at catalog price (Task 5 compliance: merchant can hold list price)
+            elif floor_price >= cat_price:
+                if last_buyer_offer and last_buyer_offer >= cat_price:
+                    action = "ACCEPT"
+                    unit_p = last_buyer_offer
+                    rationale = f"Buyer offer meets or exceeds catalog price INR {cat_price:.2f} with zero-discount policy."
+                    msg = f"We accept your offer of INR {unit_p:.2f} for {prod_name}."
+                    margin_check = f"Margin check: PASSED (Met catalog price INR {cat_price:.2f})"
+                else:
+                    action = "COUNTER"
+                    unit_p = cat_price
+                    rationale = f"Strict margin policy enforces holding catalog price of INR {cat_price:.2f}."
+                    msg = f"Our best price is INR {cat_price:.2f} for {prod_name}."
+                    margin_check = f"Margin check: PASSED (Held catalog price INR {cat_price:.2f})"
+
+            # 3. Buyer offer meets or exceeds catalog price
+            elif last_buyer_offer and last_buyer_offer >= cat_price:
                 action = "ACCEPT"
                 unit_p = last_buyer_offer
-                rationale = f"Buyer offer of INR {unit_p:.2f} meets or exceeds merchant price floor of INR {floor_price:.2f}. Accepted."
+                rationale = f"Buyer offer of INR {unit_p:.2f} meets catalog list price. Accepted."
                 msg = f"We accept your offer of INR {unit_p:.2f} for {prod_name}."
+                margin_check = f"Margin check: PASSED (Floor INR {floor_price:.2f})"
+
+            # 4. Buyer offer is at or above floor price
+            elif last_buyer_offer and last_buyer_offer >= floor_price:
+                # Accept if buyer offer is within 3% of catalog price or in later rounds (round >= 3)
+                if last_buyer_offer >= (cat_price * Decimal("0.97")) or round_num >= 3:
+                    action = "ACCEPT"
+                    unit_p = last_buyer_offer
+                    rationale = f"Buyer offer of INR {unit_p:.2f} meets or exceeds margin floor of INR {floor_price:.2f}. Accepted."
+                    msg = f"We accept your offer of INR {unit_p:.2f} for {prod_name}."
+                    margin_check = f"Margin check: PASSED (Floor INR {floor_price:.2f})"
+                else:
+                    # Concede gradually toward buyer without dropping below floor
+                    spread = cat_price - last_buyer_offer
+                    factor = Decimal("0.45") if round_num <= 1 else Decimal("0.70")
+                    target_p = (cat_price - (spread * factor)).quantize(Decimal("1.00"))
+                    unit_p = max(floor_price, target_p)
+
+                    if unit_p <= last_buyer_offer:
+                        action = "ACCEPT"
+                        unit_p = last_buyer_offer
+                        rationale = f"Counter reached buyer offer INR {unit_p:.2f}. Accepted."
+                        msg = f"We accept your offer of INR {unit_p:.2f} for {prod_name}."
+                        margin_check = f"Margin check: PASSED (Floor INR {floor_price:.2f})"
+                    else:
+                        action = "COUNTER"
+                        rationale = f"Progressive merchant counter of INR {unit_p:.2f} preserving margin floor INR {floor_price:.2f}."
+                        msg = f"Our counter-offer is INR {unit_p:.2f} for {prod_name}."
+                        margin_check = f"Margin check: PASSED (Floor INR {floor_price:.2f})"
+
+            # 5. Buyer offer was below floor price
             else:
                 action = "COUNTER"
-                # Offer middle ground between catalog and floor
-                unit_p = max(floor_price, (cat_price * Decimal("0.95")).quantize(Decimal("0.01")))
-                rationale = f"Buyer offer was below floor. Counter-offering INR {unit_p:.2f} preserving minimum margin requirements."
+                unit_p = max(floor_price, (cat_price * Decimal("0.93")).quantize(Decimal("1.00")))
+                rationale = f"Buyer offer was below floor INR {floor_price:.2f}. Counter-offering INR {unit_p:.2f}."
                 msg = f"Our best counter-offer is INR {unit_p:.2f} for {prod_name}."
+                margin_check = f"Margin check: PASSED (Preserved floor INR {floor_price:.2f})"
 
             return schema(
                 action=action,
@@ -1137,8 +1249,9 @@ class MockProvider(BaseLLMProvider):
                 total_amount=unit_p,
                 rationale=rationale,
                 message=msg,
-                margin_check=f"Margin check: PASSED (Preserved floor INR {floor_price:.2f})",
+                margin_check=margin_check,
                 cross_sell_product_id=None,
+                bundle_proposal=bundle_proposal,
                 basket_items=[
                     BasketItemSchema(
                         product_id=prod_id,
@@ -1462,15 +1575,27 @@ class AIGateway:
 
         chain = self.resolve_chain(role.lower().replace("_agent", ""))
         errors_encountered = []
+        provider_attempts = []
         depth = 0
 
         for p_name in chain:
             if not self.circuit_breaker.is_available(p_name):
                 logger.info(f"AIGateway: Skipping rate-limited / unavailable provider '{p_name}' (Circuit OPEN).")
+                provider_attempts.append({
+                    "provider": p_name,
+                    "status": "circuit_open",
+                    "error_code": "CIRCUIT_OPEN"
+                })
                 continue
 
             provider = self.get_provider(p_name)
-            if not getattr(provider, "is_available", True):
+            if not getattr(provider, "is_available", True) and p_name != "mock":
+                logger.info(f"AIGateway: Skipping unconfigured provider '{p_name}' (No API key).")
+                provider_attempts.append({
+                    "provider": p_name,
+                    "status": "misconfigured",
+                    "error_code": "NO_API_KEY"
+                })
                 continue
 
             # Attempt structured generation
@@ -1498,7 +1623,19 @@ class AIGateway:
                     meta.agent_role = role
                     meta.fallback_used = (depth > 0 or p_name == "mock")
                     meta.fallback_depth = depth
-                    meta.fallback_reason = "; ".join(errors_encountered) if errors_encountered else None
+                    meta.provider_attempts = list(provider_attempts)
+
+                    if p_name != "mock":
+                        provider_attempts.append({
+                            "provider": p_name,
+                            "status": "success",
+                            "model": getattr(provider, "model_name", None),
+                            "latency_ms": meta.response_latency_ms
+                        })
+                        meta.provider_attempts = list(provider_attempts)
+                        meta.fallback_reason = "; ".join(errors_encountered) if errors_encountered else None
+                    else:
+                        meta.fallback_reason = "all_real_providers_unavailable" if not errors_encountered else "; ".join(errors_encountered)
 
                     self.circuit_breaker.record_success(p_name)
 
@@ -1513,9 +1650,17 @@ class AIGateway:
 
                 except Exception as e:
                     err_msg = str(e)
+                    status_code = getattr(e, "status_code", None) or (429 if "429" in err_msg else 500)
+                    category = getattr(e, "category", None) or ("RATE_LIMITED" if status_code == 429 else "FAILED")
                     logger.warning(f"AIGateway: Provider '{p_name}' turn generation attempt {attempt+1} failed: {err_msg[:120]}")
                     if attempt == max_retries:
-                        errors_encountered.append(f"{p_name}: {err_msg[:80]}")
+                        errors_encountered.append(f"{p_name}_{category.lower()}")
+                        provider_attempts.append({
+                            "provider": p_name,
+                            "status": "failed",
+                            "error_code": str(status_code),
+                            "category": category
+                        })
                         depth += 1
                     continue
 
@@ -1527,7 +1672,8 @@ class AIGateway:
         meta.agent_role = role
         meta.fallback_used = True
         meta.fallback_depth = depth
-        meta.fallback_reason = "All real LLM providers exhausted or unavailable: " + "; ".join(errors_encountered)
+        meta.fallback_reason = "all_real_providers_unavailable" if not errors_encountered else "; ".join(errors_encountered)
+        meta.provider_attempts = list(provider_attempts)
 
         self._session_metrics["deterministic_fallback_calls"] += 1
         self._session_metrics["calls_per_provider"]["mock"] = self._session_metrics["calls_per_provider"].get("mock", 0) + 1

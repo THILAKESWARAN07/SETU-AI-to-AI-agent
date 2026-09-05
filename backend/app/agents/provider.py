@@ -91,6 +91,7 @@ class ProviderExecutionMetadata(BaseModel):
     fallback_depth: int = Field(default=0, description="0 for primary, 1 for 1st fallback, etc.")
     fallback_reason: Optional[str] = Field(default=None, description="Reason/error for falling back")
     response_latency_ms: float = Field(default=0.0, description="Response time in milliseconds")
+    provider_attempts: List[Dict[str, Any]] = Field(default_factory=list, description="Sanitized audit log of provider attempts during failover")
 
 
 # --- PROVIDER INTERFACE ---

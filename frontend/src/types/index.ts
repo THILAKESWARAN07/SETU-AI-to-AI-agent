@@ -207,6 +207,8 @@ export interface DemoCommerceResponse {
     mock_calls: number;
     real_llm_calls?: number;
     deterministic_fallback_calls?: number;
+    deterministic_fallback_turns?: number;
+    provider_failovers?: number;
     deterministic_operations_avoided?: number;
     estimated_llm_calls_saved?: number;
     fallback_count: number;

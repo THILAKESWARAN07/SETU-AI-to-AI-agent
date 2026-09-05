@@ -37,22 +37,22 @@ class Settings:
     LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
     # Priority & Gateway Settings
-    PRIMARY_LLM_PROVIDER: str = os.getenv("PRIMARY_LLM_PROVIDER", "cerebras")
-    LLM_PROVIDER_CHAIN: str = os.getenv("LLM_PROVIDER_CHAIN", "cerebras,groq,gemini,nvidia_nim,openrouter,ollama,mock")
+    PRIMARY_LLM_PROVIDER: str = os.getenv("PRIMARY_LLM_PROVIDER", "groq")
+    LLM_PROVIDER_CHAIN: str = os.getenv("LLM_PROVIDER_CHAIN", "groq,gemini,openrouter,mock")
     CIRCUIT_BREAKER_COOLDOWN_SECONDS: float = float(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "60.0"))
 
     # Role-Specific LLM Settings (100% Free / Free-Tier Providers)
-    BUYER_LLM_PROVIDER: str = os.getenv("BUYER_LLM_PROVIDER", "cerebras")
-    BUYER_LLM_MODEL: str = os.getenv("BUYER_LLM_MODEL", "llama3.1-70b")
-    BUYER_LLM_FALLBACKS: str = os.getenv("BUYER_LLM_FALLBACKS", "groq,gemini,nvidia_nim,openrouter,ollama,mock")
+    BUYER_LLM_PROVIDER: str = os.getenv("BUYER_LLM_PROVIDER", "groq")
+    BUYER_LLM_MODEL: str = os.getenv("BUYER_LLM_MODEL", "groq/compound-mini")
+    BUYER_LLM_FALLBACKS: str = os.getenv("BUYER_LLM_FALLBACKS", "gemini,openrouter,mock")
 
     MERCHANT_LLM_PROVIDER: str = os.getenv("MERCHANT_LLM_PROVIDER", "groq")
     MERCHANT_LLM_MODEL: str = os.getenv("MERCHANT_LLM_MODEL", "groq/compound-mini")
-    MERCHANT_LLM_FALLBACKS: str = os.getenv("MERCHANT_LLM_FALLBACKS", "cerebras,gemini,nvidia_nim,openrouter,ollama,mock")
+    MERCHANT_LLM_FALLBACKS: str = os.getenv("MERCHANT_LLM_FALLBACKS", "gemini,openrouter,mock")
 
     AUXILIARY_LLM_PROVIDER: str = os.getenv("AUXILIARY_LLM_PROVIDER", "groq")
     AUXILIARY_LLM_MODEL: str = os.getenv("AUXILIARY_LLM_MODEL", "groq/compound-mini")
-    AUXILIARY_LLM_FALLBACKS: str = os.getenv("AUXILIARY_LLM_FALLBACKS", "cerebras,gemini,nvidia_nim,openrouter,ollama,mock")
+    AUXILIARY_LLM_FALLBACKS: str = os.getenv("AUXILIARY_LLM_FALLBACKS", "gemini,openrouter,mock")
 
     # API Keys & Models for Free / Fast Providers
     CEREBRAS_API_KEY: str = os.getenv("CEREBRAS_API_KEY", "")
@@ -92,20 +92,20 @@ class Settings:
         self.RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "mockwebhooksecret123")
         self.IS_PAYMENT_TEST_MODE = os.getenv("IS_PAYMENT_TEST_MODE", "True").lower() in ("true", "1", "yes")
         
-        self.PRIMARY_LLM_PROVIDER = os.getenv("PRIMARY_LLM_PROVIDER", "cerebras")
-        self.LLM_PROVIDER_CHAIN = os.getenv("LLM_PROVIDER_CHAIN", "cerebras,groq,gemini,nvidia_nim,openrouter,ollama,mock")
+        self.PRIMARY_LLM_PROVIDER = os.getenv("PRIMARY_LLM_PROVIDER", "groq")
+        self.LLM_PROVIDER_CHAIN = os.getenv("LLM_PROVIDER_CHAIN", "groq,gemini,openrouter,mock")
         self.CIRCUIT_BREAKER_COOLDOWN_SECONDS = float(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "60.0"))
 
-        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "cerebras")
-        self.LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.5-flash")
+        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
+        self.LLM_MODEL = os.getenv("LLM_MODEL", "groq/compound-mini")
         self.LLM_API_KEY = os.getenv("LLM_API_KEY", "")
         self.LLM_FALLBACK_TO_MOCK = os.getenv("LLM_FALLBACK_TO_MOCK", "True").lower() in ("true", "1", "yes")
         self.LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "25.0"))
         self.LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
-        self.BUYER_LLM_PROVIDER = os.getenv("BUYER_LLM_PROVIDER", "gemini")
-        self.BUYER_LLM_MODEL = os.getenv("BUYER_LLM_MODEL", "gemini-3.5-flash")
-        self.BUYER_LLM_FALLBACKS = os.getenv("BUYER_LLM_FALLBACKS", "groq,openrouter,mock")
+        self.BUYER_LLM_PROVIDER = os.getenv("BUYER_LLM_PROVIDER", "groq")
+        self.BUYER_LLM_MODEL = os.getenv("BUYER_LLM_MODEL", "groq/compound-mini")
+        self.BUYER_LLM_FALLBACKS = os.getenv("BUYER_LLM_FALLBACKS", "gemini,openrouter,mock")
 
         self.MERCHANT_LLM_PROVIDER = os.getenv("MERCHANT_LLM_PROVIDER", "groq")
         self.MERCHANT_LLM_MODEL = os.getenv("MERCHANT_LLM_MODEL", "groq/compound-mini")

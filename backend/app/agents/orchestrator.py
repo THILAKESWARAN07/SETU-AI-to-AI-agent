@@ -204,6 +204,7 @@ class NegotiationOrchestrator:
                     evt_data["fallback_depth"] = int(effective_meta.get("fallback_depth", 0))
                     evt_data["fallback_reason"] = effective_meta.get("fallback_reason", None)
                     evt_data["response_latency_ms"] = effective_meta.get("response_latency_ms", 0.0)
+                    evt_data["provider_attempts"] = effective_meta.get("provider_attempts", [])
                 else:
                     evt_data["provider_used"] = getattr(effective_meta, "provider_used", "mock")
                     evt_data["provider_type"] = getattr(effective_meta, "provider_type", "real_llm" if evt_data["provider_used"] != "mock" else "deterministic_fallback")
@@ -213,6 +214,7 @@ class NegotiationOrchestrator:
                     evt_data["fallback_depth"] = int(getattr(effective_meta, "fallback_depth", 0))
                     evt_data["fallback_reason"] = getattr(effective_meta, "fallback_reason", None)
                     evt_data["response_latency_ms"] = getattr(effective_meta, "response_latency_ms", 0.0)
+                    evt_data["provider_attempts"] = getattr(effective_meta, "provider_attempts", [])
                 
                 evt_data["provider_execution"] = {
                     "provider_used": evt_data["provider_used"],
@@ -222,7 +224,8 @@ class NegotiationOrchestrator:
                     "fallback_used": evt_data["fallback_used"],
                     "fallback_depth": evt_data["fallback_depth"],
                     "fallback_reason": evt_data["fallback_reason"],
-                    "response_latency_ms": evt_data["response_latency_ms"]
+                    "response_latency_ms": evt_data["response_latency_ms"],
+                    "provider_attempts": evt_data["provider_attempts"]
                 }
 
             conversation_events.append(evt_data)
@@ -245,6 +248,7 @@ class NegotiationOrchestrator:
             mock_calls = sum(1 for m in provider_call_records if m and (getattr(m, "provider_used", None) == "mock" or (isinstance(m, dict) and m.get("provider_used") == "mock")))
             
             fallback_count = sum(1 for m in provider_call_records if m and (getattr(m, "fallback_used", False) or (isinstance(m, dict) and m.get("fallback_used"))))
+            provider_failovers = sum(1 for m in provider_call_records if m and (int(getattr(m, "fallback_depth", 0) or (m.get("fallback_depth") if isinstance(m, dict) else 0)) > 0 or len(getattr(m, "provider_attempts", []) or (m.get("provider_attempts") if isinstance(m, dict) else [])) > 1))
             real_llm_calls = cerebras_calls + groq_calls + gemini_calls + nvidia_nim_calls + openrouter_calls + ollama_calls
             
             # Count deterministic operations avoided: catalog search, filter, margin math, policy checks, basket checks, inventory checks
@@ -261,6 +265,8 @@ class NegotiationOrchestrator:
                 "mock_calls": mock_calls,
                 "real_llm_calls": real_llm_calls,
                 "deterministic_fallback_calls": mock_calls,
+                "deterministic_fallback_turns": mock_calls,
+                "provider_failovers": provider_failovers,
                 "deterministic_operations_avoided": deterministic_ops_avoided,
                 "estimated_llm_calls_saved": estimated_llm_calls_saved,
                 "fallback_count": fallback_count,
@@ -491,7 +497,8 @@ class NegotiationOrchestrator:
         max_disc = Decimal(str(policy_info.get("max_discount_percent", "15.00")))
         min_by_margin = (cost_price / (Decimal("1") - min_margin / Decimal("100"))) if cost_price > Decimal("0") else Decimal("0.00")
         min_by_disc = cat_price * (Decimal("1") - max_disc / Decimal("100"))
-        floor_price = max(min_by_margin, min_by_disc).quantize(Decimal("0.01"))
+        min_sp = Decimal(str(prod_details.get("min_selling_price") or "0.00"))
+        floor_price = max(min_by_margin, min_by_disc, min_sp).quantize(Decimal("0.01"))
 
         buyer_context = NegotiationContext(
             agent_role="BUYER_AGENT",
