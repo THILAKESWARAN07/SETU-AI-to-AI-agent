@@ -2,6 +2,8 @@
 
 ## AI-to-AI Commerce with a Deterministic Trust Layer
 
+🌐 **Live Demo:** [https://setu-ai-to-ai-agent.vercel.app/](https://setu-ai-to-ai-agent.vercel.app/)
+
 [![Buildathon Ready](https://img.shields.io/badge/Buildathon-Ready-brightgreen.svg)]()
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-19.2+-61DAFB.svg?style=flat&logo=react&logoColor=black)](https://react.dev)
