@@ -263,6 +263,7 @@ class DemoCommerceResponse(BaseModel):
     basket_type: Optional[str] = "STANDALONE"
     selected_basket_type: Optional[str] = "STANDALONE"
     financials: Optional[Dict[str, Any]] = None
+    merchant_financials: Optional[Dict[str, Any]] = None
 
     # Structured Proposal and Offer Lifecycle
     buyer_opening_offer: Optional[Dict[str, Any]] = None

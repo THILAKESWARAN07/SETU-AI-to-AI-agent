@@ -180,6 +180,17 @@ export interface DemoCommerceResponse {
   proposals?: any[];
   accepted_proposal_id?: string;
   financials?: any;
+  merchant_financials?: {
+    original_price?: string | null;
+    merchant_cost?: string | null;
+    final_price?: string | null;
+    merchant_profit?: string | null;
+    merchant_margin_percent?: string | null;
+    customer_savings?: string | null;
+    customer_discount_percent?: string | null;
+    is_within_margin_policy?: boolean;
+    block_reason?: string | null;
+  } | null;
 
   // Trace variables
   agent_mode?: string;

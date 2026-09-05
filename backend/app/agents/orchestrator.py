@@ -373,6 +373,36 @@ class NegotiationOrchestrator:
                 except Exception:
                     safe_final_amount = None
 
+            # Calculate merchant financials baseline for merchant-only view
+            merchant_cost_str = None
+            catalog_lookup = {}
+            try:
+                catalog_lookup = {p.id: p for p in self.db.query(Product).all()} if self.db else {}
+                if prod_id == 3:
+                    cost_val = Decimal("0.00")
+                    for pid in [1, 2]:
+                        if pid in catalog_lookup:
+                            cost_val += Decimal(str(catalog_lookup[pid].cost))
+                    merchant_cost_str = str(cost_val)
+                elif prod_id in catalog_lookup:
+                    merchant_cost_str = str(catalog_lookup[prod_id].cost)
+            except Exception:
+                merchant_cost_str = None
+
+            orig_price_disp = original_amt_str if original_amt_str and original_amt_str != "0.00" else (str(catalog_lookup[prod_id].price) if prod_id in catalog_lookup else None)
+
+            failed_merchant_financials = {
+                "original_price": orig_price_disp,
+                "merchant_cost": merchant_cost_str,
+                "final_price": None,
+                "merchant_profit": None,
+                "merchant_margin_percent": None,
+                "customer_savings": None,
+                "customer_discount_percent": None,
+                "is_within_margin_policy": False,
+                "block_reason": reasons[0] if reasons else "Policy engine validation failure"
+            }
+
             return {
                 "buyer_id": buyer_id,
                 "intent": intent,
@@ -396,6 +426,7 @@ class NegotiationOrchestrator:
                 "discount_percent": None,
                 "margin_percent": None,
                 "policy_version": policy_version,
+                "merchant_financials": failed_merchant_financials,
                 "agent_mode": mode_val,
                 "buyer_objective": memory.buyer_goal,
                 "buyer_tools_used": list(self.buyer.tools_called_in_session),
@@ -2034,6 +2065,17 @@ class NegotiationOrchestrator:
                 "basket_type": "BUNDLE" if len(basket_dict["items"]) > 1 else "STANDALONE",
                 "selected_basket_type": "BUNDLE" if len(basket_dict["items"]) > 1 else "STANDALONE",
                 "financials": financials,
+                "merchant_financials": {
+                    "original_price": financials.get("catalog_total"),
+                    "merchant_cost": financials.get("total_cost"),
+                    "final_price": financials.get("basket_total") if purchase_res.get("decision") in ["APPROVED", "REQUIRES_APPROVAL"] else None,
+                    "merchant_profit": financials.get("profit_amount") if purchase_res.get("decision") in ["APPROVED", "REQUIRES_APPROVAL"] else None,
+                    "merchant_margin_percent": financials.get("gross_margin_percent") if purchase_res.get("decision") in ["APPROVED", "REQUIRES_APPROVAL"] else None,
+                    "customer_savings": financials.get("buyer_savings_amount") if purchase_res.get("decision") in ["APPROVED", "REQUIRES_APPROVAL"] else None,
+                    "customer_discount_percent": financials.get("buyer_savings_percent") if purchase_res.get("decision") in ["APPROVED", "REQUIRES_APPROVAL"] else None,
+                    "is_within_margin_policy": (purchase_res.get("decision") == "APPROVED"),
+                    "block_reason": None
+                },
                 
                 # Structured Proposal and Offer Lifecycle
                 "buyer_opening_offer": buyer_opening_offer_record,

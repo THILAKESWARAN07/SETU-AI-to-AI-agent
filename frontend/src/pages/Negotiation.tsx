@@ -14,7 +14,8 @@ import {
   ShieldCheck,
   Layers,
   Sparkles,
-  RotateCcw
+  RotateCcw,
+  Lock
 } from 'lucide-react';
 import { apiService } from '../services/api';
 import type { DemoCommerceResponse, ConversationEvent } from '../types';
@@ -1237,6 +1238,178 @@ export default function Negotiation() {
             </div>
 
           </div>
+
+          {/* 🔒 MERCHANT-ONLY FINANCIAL DISCLOSURE CARD (Only visible after negotiation terminal state) */}
+          {!isNegotiating && (isDealApproved || isDealRequiresApproval || isDealBlocked) && (
+            <div className="merchant-financial-summary-card animate-fade-in" style={{
+              backgroundColor: 'var(--bg-card)',
+              border: '1px solid rgba(245, 158, 11, 0.35)',
+              borderRadius: '16px',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4), 0 0 15px rgba(245, 158, 11, 0.08)'
+            }}>
+              {/* Header with Lock and Visibility Disclaimer */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid rgba(245, 158, 11, 0.2)', paddingBottom: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '8px',
+                    background: 'rgba(245, 158, 11, 0.15)',
+                    border: '1px solid rgba(245, 158, 11, 0.4)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fbbf24'
+                  }}>
+                    <Lock style={{ width: '16px', height: '16px' }} />
+                  </div>
+                  <div>
+                    <h3 className="font-mono" style={{ fontSize: '0.88rem', fontWeight: 800, margin: 0, color: '#fbbf24', letterSpacing: '0.04em' }}>
+                      🔒 MERCHANT ONLY
+                    </h3>
+                    <span style={{ fontSize: '0.68rem', color: '#94a3b8', display: 'block', marginTop: '1px' }}>
+                      Visible only to the merchant
+                    </span>
+                  </div>
+                </div>
+                <span className="font-mono" style={{
+                  fontSize: '0.62rem',
+                  padding: '2px 8px',
+                  borderRadius: '999px',
+                  background: 'rgba(245, 158, 11, 0.12)',
+                  color: '#fbbf24',
+                  border: '1px solid rgba(245, 158, 11, 0.3)',
+                  fontWeight: 700
+                }}>
+                  CONFIDENTIAL
+                </span>
+              </div>
+
+              {/* Financial Data Table / Key Value Rows */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0, 0, 0, 0.3)', padding: '14px', borderRadius: '10px', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                {(() => {
+                  const fin = result?.merchant_financials;
+                  const origPrice = fin?.original_price ? parseFloat(fin.original_price) : (result?.original_amount ? parseFloat(result.original_amount) : (liveCatalogPrice || null));
+                  const costPrice = fin?.merchant_cost ? parseFloat(fin.merchant_cost) : null;
+                  const finalPrice = isDealBlocked ? null : (fin?.final_price ? parseFloat(fin.final_price) : (liveFinalPrice || (result?.final_amount ? parseFloat(result.final_amount) : null)));
+                  const profit = isDealBlocked ? null : (fin?.merchant_profit ? parseFloat(fin.merchant_profit) : (finalPrice !== null && costPrice !== null ? finalPrice - costPrice : null));
+                  const marginPct = isDealBlocked ? null : (fin?.merchant_margin_percent ? parseFloat(fin.merchant_margin_percent) : (profit !== null && finalPrice !== null && finalPrice > 0 ? (profit / finalPrice) * 100 : (result?.margin_percent ? parseFloat(result.margin_percent) : null)));
+                  const custSavings = isDealBlocked ? null : (fin?.customer_savings ? parseFloat(fin.customer_savings) : (origPrice !== null && finalPrice !== null ? Math.max(0, origPrice - finalPrice) : null));
+                  const custDiscountPct = isDealBlocked ? null : (fin?.customer_discount_percent ? parseFloat(fin.customer_discount_percent) : (custSavings !== null && origPrice !== null && origPrice > 0 ? (custSavings / origPrice) * 100 : (result?.discount_percent ? parseFloat(result.discount_percent) : null)));
+
+                  return (
+                    <>
+                      {/* Row 1: Original Price */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Original Price</span>
+                        <span className="font-mono" style={{ color: 'var(--text-main)', fontWeight: 600 }}>
+                          {origPrice !== null ? `₹${origPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A'}
+                        </span>
+                      </div>
+
+                      {/* Row 2: Merchant Cost */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Merchant Cost</span>
+                        <span className="font-mono" style={{ color: '#f59e0b', fontWeight: 600 }}>
+                          {costPrice !== null ? `₹${costPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A'}
+                        </span>
+                      </div>
+
+                      {/* Divider */}
+                      <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.06)', margin: '2px 0' }} />
+
+                      {/* Row 3: Final Negotiated Price */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Final Price</span>
+                        <span className="font-mono" style={{ color: isDealBlocked ? '#ef4444' : '#38bdf8', fontWeight: 700 }}>
+                          {finalPrice !== null ? `₹${finalPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A'}
+                        </span>
+                      </div>
+
+                      {/* Row 4: Merchant Profit */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Merchant Profit</span>
+                        <span className="font-mono" style={{ color: isDealBlocked ? '#ef4444' : '#10b981', fontWeight: 700 }}>
+                          {profit !== null ? `₹${profit.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A'}
+                        </span>
+                      </div>
+
+                      {/* Row 5: Merchant Margin */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Merchant Margin</span>
+                        <span className="font-mono" style={{ color: isDealBlocked ? '#ef4444' : '#10b981', fontWeight: 700 }}>
+                          {marginPct !== null ? `${marginPct.toFixed(2)}%` : 'N/A'}
+                        </span>
+                      </div>
+
+                      {/* Divider */}
+                      <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.06)', margin: '2px 0' }} />
+
+                      {/* Row 6: Customer Savings */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Customer Savings</span>
+                        <span className="font-mono" style={{ color: isDealBlocked ? '#94a3b8' : '#34d399', fontWeight: 600 }}>
+                          {custSavings !== null ? `₹${custSavings.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'N/A'}
+                        </span>
+                      </div>
+
+                      {/* Row 7: Customer Discount */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Customer Discount</span>
+                        <span className="font-mono" style={{ color: isDealBlocked ? '#94a3b8' : '#34d399', fontWeight: 600 }}>
+                          {custDiscountPct !== null ? `${custDiscountPct.toFixed(2)}%` : 'N/A'}
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* Margin Policy Compliance Badge */}
+              {isDealApproved && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 12px',
+                  background: 'rgba(16, 185, 129, 0.1)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  borderRadius: '8px',
+                  fontSize: '0.74rem',
+                  color: '#34d399'
+                }}>
+                  <CheckCircle2 style={{ width: '15px', height: '15px', color: '#10b981', flexShrink: 0 }} />
+                  <span style={{ fontWeight: 600 }}>✓ Within merchant margin policy</span>
+                </div>
+              )}
+
+              {isDealBlocked && (
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px',
+                  padding: '8px 12px',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  borderRadius: '8px',
+                  fontSize: '0.72rem',
+                  color: '#fca5a5'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#ef4444', fontWeight: 700 }}>
+                    <AlertTriangle style={{ width: '14px', height: '14px', flexShrink: 0 }} />
+                    <span>Deal Blocked by Merchant Policy</span>
+                  </div>
+                  <span style={{ fontSize: '0.68rem', color: '#f87171' }}>
+                    {result?.merchant_financials?.block_reason || result?.reasons?.[0] || 'Transaction below minimum acceptable floor / margin.'}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
 
         </div>
 
