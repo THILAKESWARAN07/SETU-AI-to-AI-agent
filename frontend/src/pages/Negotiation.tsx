@@ -1067,51 +1067,58 @@ export default function Negotiation() {
                 </span>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.25)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-                  {result.basket.items.map((item: any, idx: number) => {
-                    const itemOrig = parseFloat(item.original_price) * item.quantity;
-                    const itemNeg = parseFloat(item.negotiated_price) * item.quantity;
-                    const itemDisc = Math.max(0, itemOrig - itemNeg);
-                    const itemPct = itemOrig > 0 ? (itemDisc / itemOrig) * 100 : 0;
+                  {(() => {
+                    const isBundleBasket = (result?.selected_basket_type === 'BUNDLE') || (result?.basket_type === 'BUNDLE') || (result?.basket?.items?.length > 1);
                     return (
-                      <div key={idx} style={{ display: 'flex', flexDirection: 'column', fontSize: '0.82rem', gap: '3px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ color: 'var(--text-main)', fontWeight: 500 }}>
-                            {item.name} {item.quantity > 1 ? `x${item.quantity}` : ''}
-                            {item.is_primary && (
-                              <span style={{ fontSize: '8px', marginLeft: '6px', padding: '1px 4px', borderRadius: '3px', background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.25)' }}>
-                                PRIMARY
-                              </span>
-                            )}
-                          </span>
-                          <span className="font-mono" style={{ color: 'var(--text-main)', fontWeight: 700 }}>
-                            ₹{itemNeg.toLocaleString('en-IN')}
-                          </span>
-                        </div>
-                        {itemDisc > 0 ? (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '0.72rem', color: '#34d399', background: 'rgba(52, 211, 153, 0.06)', padding: '5px 8px', borderRadius: '4px', marginTop: '2px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ color: 'var(--text-dimmed)' }}>List Price: ₹{itemOrig.toLocaleString('en-IN')}</span>
-                              <span style={{ fontWeight: 600 }}>You Save: ₹{itemDisc.toLocaleString('en-IN')}</span>
+                      <>
+                        {result.basket.items.map((item: any, idx: number) => {
+                          const itemOrig = parseFloat(item.original_price || '0') * (item.quantity || 1);
+                          const itemNeg = parseFloat(item.negotiated_price || '0') * (item.quantity || 1);
+                          const itemDisc = Math.max(0, itemOrig - itemNeg);
+                          const itemPct = itemOrig > 0 ? (itemDisc / itemOrig) * 100 : 0;
+                          return (
+                            <div key={idx} style={{ display: 'flex', flexDirection: 'column', fontSize: '0.82rem', gap: '3px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ color: 'var(--text-main)', fontWeight: 500 }}>
+                                  {item.name} {item.quantity > 1 ? `x${item.quantity}` : ''}
+                                  {item.is_primary && (
+                                    <span style={{ fontSize: '8px', marginLeft: '6px', padding: '1px 4px', borderRadius: '3px', background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.25)' }}>
+                                      PRIMARY
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="font-mono" style={{ color: 'var(--text-main)', fontWeight: 700 }}>
+                                  ₹{itemNeg.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                              {itemDisc > 0 ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '0.72rem', color: '#34d399', background: 'rgba(52, 211, 153, 0.06)', padding: '5px 8px', borderRadius: '4px', marginTop: '2px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <span style={{ color: 'var(--text-dimmed)' }}>List Price: ₹{itemOrig.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    <span style={{ fontWeight: 600 }}>You Save: ₹{itemDisc.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  </div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', color: '#10b981' }}>
+                                    <span>Discount:</span>
+                                    <span>₹{itemDisc.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({itemPct.toFixed(2)}%)</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-dimmed)' }}>
+                                  <span>List Price: ₹{itemOrig.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                </div>
+                              )}
                             </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#10b981' }}>
-                              <span>Discount: {itemPct.toFixed(2)}%</span>
-                              <span>₹{itemDisc.toLocaleString('en-IN')} ({itemPct.toFixed(2)}%)</span>
-                            </div>
-                          </div>
-                        ) : (
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-dimmed)' }}>
-                            <span>List Price: ₹{itemOrig.toLocaleString('en-IN')}</span>
+                          );
+                        })}
+                        {isBundleBasket && parseFloat(result.basket.discount_amount || '0') > 0 && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#a78bfa', borderTop: '1px dashed rgba(255,255,255,0.08)', paddingTop: '6px', marginTop: '4px', fontWeight: 700 }}>
+                            <span>Bundle Savings:</span>
+                            <span>₹{Math.abs(parseFloat(result.basket.discount_amount)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </div>
                         )}
-                      </div>
+                      </>
                     );
-                  })}
-                  {parseFloat(result.basket.discount_amount || '0') > 0 && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#34d399', borderTop: '1px dashed rgba(255,255,255,0.08)', paddingTop: '6px', marginTop: '4px', fontWeight: 700 }}>
-                      <span>Bundle Savings:</span>
-                      <span>₹{Math.abs(parseFloat(result.basket.discount_amount)).toLocaleString('en-IN')}</span>
-                    </div>
-                  )}
+                  })()}
                 </div>
               </div>
             )}

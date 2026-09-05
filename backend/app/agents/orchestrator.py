@@ -216,6 +216,15 @@ class NegotiationOrchestrator:
                     evt_data["response_latency_ms"] = getattr(effective_meta, "response_latency_ms", 0.0)
                     evt_data["provider_attempts"] = getattr(effective_meta, "provider_attempts", [])
                 
+                # Expose convenience aliases for UI & tests
+                evt_data["provider"] = evt_data["provider_used"]
+                evt_data["model"] = evt_data["model_name"]
+                evt_data["mode"] = evt_data["provider_type"]
+                evt_data["latency_ms"] = evt_data["response_latency_ms"]
+                evt_data["fallback"] = evt_data["fallback_used"]
+                if "sender" not in evt_data and "actor" in evt_data:
+                    evt_data["sender"] = evt_data["actor"]
+
                 evt_data["provider_execution"] = {
                     "provider_used": evt_data["provider_used"],
                     "provider_type": evt_data["provider_type"],
